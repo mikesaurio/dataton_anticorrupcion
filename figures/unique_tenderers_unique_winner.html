@@ -1,0 +1,833 @@
+
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-tables-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-gl-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/jquery-2.1.4.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/ui/1.10.4/jquery-ui.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.1.20/require.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js" type="text/javascript"></script>
+<script type="text/javascript">function HoloViewsWidget() {
+}
+
+HoloViewsWidget.prototype.init_slider = function(init_val){
+  if(this.load_json) {
+    this.from_json()
+  } else {
+    this.update_cache();
+  }
+}
+
+HoloViewsWidget.prototype.populate_cache = function(idx){
+  this.cache[idx].innerHTML = this.frames[idx];
+  if (this.embed) {
+    delete this.frames[idx];
+  }
+}
+
+HoloViewsWidget.prototype.process_error = function(msg){
+}
+
+HoloViewsWidget.prototype.from_json = function() {
+  var data_url = this.json_path + this.id + '.json';
+  $.getJSON(data_url, $.proxy(function(json_data) {
+    this.frames = json_data;
+    this.update_cache();
+    this.update(0);
+  }, this));
+}
+
+HoloViewsWidget.prototype.dynamic_update = function(current){
+  if (current === undefined) {
+    return
+  }
+  this.current = current;
+  if (this.comm) {
+    var msg = {comm_id: this.id+'_client', content: current}
+    this.comm.send(msg);
+  }
+}
+
+HoloViewsWidget.prototype.update_cache = function(force){
+  var frame_len = Object.keys(this.frames).length;
+  for (var i=0; i<frame_len; i++) {
+    if(!this.load_json || this.dynamic)  {
+      var frame = Object.keys(this.frames)[i];
+    } else {
+      var frame = i;
+    }
+    if(!(frame in this.cache) || force) {
+      if ((frame in this.cache) && force) { this.cache[frame].remove() }
+      var div = document.createElement("div");
+      var parent = document.getElementById("_anim_img"+this.id);
+      div.style.display = "none";
+      parent.appendChild(div)
+      this.cache[frame] = div;
+      var cache_id = "_anim_img"+this.id+"_"+frame;
+      this.populate_cache(frame);
+    }
+  }
+}
+
+HoloViewsWidget.prototype.update = function(current){
+  if(current in this.cache) {
+    for (var index in this.cache) {
+      this.cache[index].style.display = "none";
+    }
+    this.cache[current].style.display = "";
+    this.wait = false;
+  }
+}
+
+HoloViewsWidget.prototype.init_comms = function() {
+  var that = this
+  HoloViews.comm_manager.register_target(this.plot_id, this.id, function (msg) { that.msg_handler(msg) })
+  if (!this.cached || this.dynamic) {
+    function ack_callback(msg) {
+      var msg = msg.metadata;
+      var comm_id = msg.comm_id;
+      var comm_status = HoloViews.comm_status[comm_id];
+      if (that.queue.length > 0) {
+        that.time = Date.now();
+        that.dynamic_update(that.queue[that.queue.length-1]);
+        that.queue = [];
+      } else {
+        that.wait = false;
+      }
+      if ((msg.msg_type == "Ready") && msg.content) {
+        console.log("Python callback returned following output:", msg.content);
+      } else if (msg.msg_type == "Error") {
+        console.log("Python failed with the following traceback:", msg.traceback)
+      }
+    }
+    var comm = HoloViews.comm_manager.get_client_comm(this.plot_id, this.id+'_client', ack_callback);
+    return comm
+  }
+}
+
+HoloViewsWidget.prototype.msg_handler = function(msg) {
+  var metadata = msg.metadata;
+  if ((metadata.msg_type == "Ready")) {
+    if (metadata.content) {
+      console.log("Python callback returned following output:", metadata.content);
+    }
+	return;
+  } else if (metadata.msg_type == "Error") {
+    console.log("Python failed with the following traceback:", metadata.traceback)
+    return
+  }
+  this.process_msg(msg)
+}
+
+HoloViewsWidget.prototype.process_msg = function(msg) {
+}
+
+function SelectionWidget(frames, id, slider_ids, keyMap, dim_vals, notFound, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.frames = frames;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.slider_ids = slider_ids;
+  this.keyMap = keyMap
+  this.current_frame = 0;
+  this.current_vals = dim_vals;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.notFound = notFound;
+  this.cached = cached;
+  this.dynamic = dynamic;
+  this.cache = {};
+  this.json_path = json_path;
+  this.init_slider(this.current_vals[0]);
+  this.queue = [];
+  this.wait = false;
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms();
+  }
+}
+
+SelectionWidget.prototype = new HoloViewsWidget;
+
+
+SelectionWidget.prototype.get_key = function(current_vals) {
+  var key = "(";
+  for (var i=0; i<this.slider_ids.length; i++)
+  {
+    var val = this.current_vals[i];
+    if (!(typeof val === 'string')) {
+      if (val % 1 === 0) { val = val.toFixed(1); }
+      else { val = val.toFixed(10); val = val.slice(0, val.length-1);}
+    }
+    key += "'" + val + "'";
+    if(i != this.slider_ids.length-1) { key += ', ';}
+    else if(this.slider_ids.length == 1) { key += ',';}
+  }
+  key += ")";
+  return this.keyMap[key];
+}
+
+SelectionWidget.prototype.set_frame = function(dim_val, dim_idx){
+  this.current_vals[dim_idx] = dim_val;
+  var key = this.current_vals;
+  if (!this.dynamic) {
+    key = this.get_key(key)
+  }
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(key);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.current_frame = key;
+    this.wait = true;
+    this.dynamic_update(key)
+  } else if (key !== undefined) {
+    this.update(key)
+  }
+}
+
+
+/* Define the ScrubberWidget class */
+function ScrubberWidget(frames, num_frames, id, interval, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.slider_id = "_anim_slider" + id;
+  this.loop_select_id = "_anim_loop_select" + id;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.interval = interval;
+  this.current_frame = 0;
+  this.direction = 0;
+  this.dynamic = dynamic;
+  this.timer = null;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.cached = cached;
+  this.frames = frames;
+  this.cache = {};
+  this.length = num_frames;
+  this.json_path = json_path;
+  document.getElementById(this.slider_id).max = this.length - 1;
+  this.init_slider(0);
+  this.wait = false;
+  this.queue = [];
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms()
+  }
+}
+
+ScrubberWidget.prototype = new HoloViewsWidget;
+
+ScrubberWidget.prototype.set_frame = function(frame){
+  this.current_frame = frame;
+  var widget = document.getElementById(this.slider_id);
+  if (widget === null) {
+    this.pause_animation();
+    return
+  }
+  widget.value = this.current_frame;
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(frame);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.wait = true;
+    this.dynamic_update(frame)
+  } else {
+    this.update(frame)
+  }
+}
+
+ScrubberWidget.prototype.get_loop_state = function(){
+  var button_group = document[this.loop_select_id].state;
+  for (var i = 0; i < button_group.length; i++) {
+    var button = button_group[i];
+    if (button.checked) {
+      return button.value;
+    }
+  }
+  return undefined;
+}
+
+
+ScrubberWidget.prototype.next_frame = function() {
+  this.set_frame(Math.min(this.length - 1, this.current_frame + 1));
+}
+
+ScrubberWidget.prototype.previous_frame = function() {
+  this.set_frame(Math.max(0, this.current_frame - 1));
+}
+
+ScrubberWidget.prototype.first_frame = function() {
+  this.set_frame(0);
+}
+
+ScrubberWidget.prototype.last_frame = function() {
+  this.set_frame(this.length - 1);
+}
+
+ScrubberWidget.prototype.slower = function() {
+  this.interval /= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.faster = function() {
+  this.interval *= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.anim_step_forward = function() {
+  if(this.current_frame < this.length - 1){
+    this.next_frame();
+  }else{
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.first_frame();
+    }else if(loop_state == "reflect"){
+      this.last_frame();
+      this.reverse_animation();
+    }else{
+      this.pause_animation();
+      this.last_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.anim_step_reverse = function() {
+  if(this.current_frame > 0){
+    this.previous_frame();
+  } else {
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.last_frame();
+    }else if(loop_state == "reflect"){
+      this.first_frame();
+      this.play_animation();
+    }else{
+      this.pause_animation();
+      this.first_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.pause_animation = function() {
+  this.direction = 0;
+  if (this.timer){
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+}
+
+ScrubberWidget.prototype.play_animation = function() {
+  this.pause_animation();
+  this.direction = 1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_forward();}, this.interval);
+}
+
+ScrubberWidget.prototype.reverse_animation = function() {
+  this.pause_animation();
+  this.direction = -1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_reverse();}, this.interval);
+}
+
+function extend(destination, source) {
+  for (var k in source) {
+    if (source.hasOwnProperty(k)) {
+      destination[k] = source[k];
+    }
+  }
+  return destination;
+}
+
+function update_widget(widget, values) {
+  if (widget.hasClass("ui-slider")) {
+    widget.slider('option', {
+      min: 0,
+      max: values.length-1,
+      dim_vals: values,
+      value: 0,
+      dim_labels: values
+    })
+    widget.slider('option', 'slide').call(widget, event, {value: 0})
+  } else {
+    widget.empty();
+    for (var i=0; i<values.length; i++){
+      widget.append($("<option>", {
+        value: i,
+        text: values[i]
+      }))
+    };
+    widget.data('values', values);
+    widget.data('value', 0);
+    widget.trigger("change");
+  };
+}
+
+function init_slider(id, plot_id, dim, values, next_vals, labels, dynamic, step, value, next_dim,
+                     dim_idx, delay, jQueryUI_CDN, UNDERSCORE_CDN) {
+  // Slider JS Block START
+  function loadcssfile(filename){
+    var fileref=document.createElement("link")
+    fileref.setAttribute("rel", "stylesheet")
+    fileref.setAttribute("type", "text/css")
+    fileref.setAttribute("href", filename)
+    document.getElementsByTagName("head")[0].appendChild(fileref)
+  }
+  loadcssfile("https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css");
+  /* Check if jQuery and jQueryUI have been loaded
+     otherwise load with require.js */
+  var jQuery = window.jQuery,
+    // check for old versions of jQuery
+    oldjQuery = jQuery && !!jQuery.fn.jquery.match(/^1\.[0-4](\.|$)/),
+    jquery_path = '',
+    paths = {},
+    noConflict;
+  var jQueryUI = jQuery.ui;
+  // check for jQuery
+  if (!jQuery || oldjQuery) {
+    // load if it's not available or doesn't meet min standards
+    paths.jQuery = jQuery;
+    noConflict = !!oldjQuery;
+  } else {
+    // register the current jQuery
+    define('jquery', [], function() { return jQuery; });
+  }
+  if (!jQueryUI) {
+    paths.jQueryUI = jQueryUI_CDN.slice(null, -3);
+  } else {
+    define('jQueryUI', [], function() { return jQuery.ui; });
+  }
+  paths.underscore = UNDERSCORE_CDN.slice(null, -3);
+  var jquery_require = {
+    paths: paths,
+    shim: {
+      "jQueryUI": {
+        exports:"$",
+        deps: ['jquery']
+      },
+      "underscore": {
+        exports: '_'
+      }
+    }
+  }
+  require.config(jquery_require);
+  require(["jQueryUI", "underscore"], function(jUI, _){
+    if (noConflict) $.noConflict(true);
+    var vals = values;
+    if (dynamic && vals.constructor === Array) {
+      var default_value = parseFloat(value);
+      var min = parseFloat(vals[0]);
+      var max = parseFloat(vals[vals.length-1]);
+      var wstep = step;
+      var wlabels = [default_value];
+      var init_label = default_value;
+    } else {
+      var min = 0;
+      if (dynamic) {
+        var max = Object.keys(vals).length - 1;
+        var init_label = labels[value];
+        var default_value = values[value];
+      } else {
+        var max = vals.length - 1;
+        var init_label = labels[value];
+        var default_value = value;
+      }
+      var wstep = 1;
+      var wlabels = labels;
+    }
+    function adjustFontSize(text) {
+      var width_ratio = (text.parent().width()/8)/text.val().length;
+      var size = Math.min(0.9, Math.max(0.6, width_ratio))+'em';
+      text.css('font-size', size);
+    }
+    var slider = $('#_anim_widget'+id+'_'+dim);
+    slider.slider({
+      animate: "fast",
+      min: min,
+      max: max,
+      step: wstep,
+      value: default_value,
+      dim_vals: vals,
+      dim_labels: wlabels,
+      next_vals: next_vals,
+      slide: function(event, ui) {
+        var vals = slider.slider("option", "dim_vals");
+        var next_vals = slider.slider("option", "next_vals");
+        var dlabels = slider.slider("option", "dim_labels");
+        if (dynamic) {
+          var dim_val = ui.value;
+          if (vals.constructor === Array) {
+            var label = ui.value;
+          } else {
+            var label = dlabels[ui.value];
+          }
+        } else {
+          var dim_val = vals[ui.value];
+          var label = dlabels[ui.value];
+        }
+        var text = $('#textInput'+id+'_'+dim);
+        text.val(label);
+        adjustFontSize(text);
+        HoloViews.index[plot_id].set_frame(dim_val, dim_idx);
+        if (Object.keys(next_vals).length > 0) {
+          var new_vals = next_vals[dim_val];
+          var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+          update_widget(next_widget, new_vals);
+        }
+      }
+    });
+    slider.keypress(function(event) {
+      if (event.which == 80 || event.which == 112) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "max");
+        for (var i=start; i<=stop; i++) {
+          var delay = i*delay;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+      if (event.which == 82 || event.which == 114) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "min");
+        var count = 0;
+        for (var i=start; i>=stop; i--) {
+          var delay = count*delay;
+          count = count + 1;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+    });
+    var textInput = $('#textInput'+id+'_'+dim)
+    textInput.val(init_label);
+    adjustFontSize(textInput);
+  });
+}
+
+function init_dropdown(id, plot_id, dim, vals, value, next_vals, labels, next_dim, dim_idx, dynamic) {
+  var widget = $("#_anim_widget"+id+'_'+dim);
+  widget.data('values', vals)
+  for (var i=0; i<vals.length; i++){
+    if (dynamic) {
+      var val = vals[i];
+    } else {
+      var val = i;
+    }
+    widget.append($("<option>", {
+      value: val,
+      text: labels[i]
+    }));
+  };
+  widget.data("next_vals", next_vals);
+  widget.val(value);
+  widget.on('change', function(event, ui) {
+    if (dynamic) {
+      var dim_val = parseInt(this.value);
+    } else {
+      var dim_val = $.data(this, 'values')[this.value];
+    }
+    var next_vals = $.data(this, "next_vals");
+    if (Object.keys(next_vals).length > 0) {
+      var new_vals = next_vals[dim_val];
+      var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+      update_widget(next_widget, new_vals);
+    }
+    var widgets = HoloViews.index[plot_id]
+    if (widgets) {
+      widgets.set_frame(dim_val, dim_idx);
+    }
+  });
+}
+
+
+if (window.HoloViews === undefined) {
+  window.HoloViews = {}
+  window.PyViz = window.HoloViews
+} else if (window.PyViz === undefined) {
+  window.PyViz = window.HoloViews
+}
+
+
+var _namespace = {
+  init_slider: init_slider,
+  init_dropdown: init_dropdown,
+  comms: {},
+  comm_status: {},
+  index: {},
+  plot_index: {},
+  kernels: {},
+  receivers: {}
+}
+
+for (var k in _namespace) {
+  if (!(k in window.HoloViews)) {
+    window.HoloViews[k] = _namespace[k];
+  }
+}
+
+// Define Bokeh specific subclasses
+function BokehSelectionWidget() {
+  SelectionWidget.apply(this, arguments);
+}
+
+function BokehScrubberWidget() {
+  ScrubberWidget.apply(this, arguments);
+}
+
+// Let them inherit from the baseclasses
+BokehSelectionWidget.prototype = Object.create(SelectionWidget.prototype);
+BokehScrubberWidget.prototype = Object.create(ScrubberWidget.prototype);
+
+// Define methods to override on widgets
+var BokehMethods = {
+  update_cache : function(){
+    for (var index in this.frames) {
+      this.frames[index] = JSON.parse(this.frames[index]);
+    }
+  },
+  update : function(current){
+    if (current === undefined) {
+      return;
+    }
+    var data = this.frames[current];
+    if (data !== undefined) {
+      if (data.root in HoloViews.plot_index) {
+        var doc = HoloViews.plot_index[data.root].model.document;
+      } else {
+        var doc = Bokeh.index[data.root].model.document;
+      }
+      doc.apply_json_patch(data.content);
+    }
+  },
+  init_comms: function() {
+    if (Bokeh.protocol !== undefined) {
+      this.receiver = new Bokeh.protocol.Receiver()
+    } else {
+      this.receiver = null;
+    }
+    return HoloViewsWidget.prototype.init_comms.call(this);
+  },
+  process_msg : function(msg) {
+    if (this.plot_id in HoloViews.plot_index) {
+      var doc = HoloViews.plot_index[this.plot_id].model.document;
+    } else {
+      var doc = Bokeh.index[this.plot_id].model.document;
+    }
+    if (this.receiver === null) { return }
+    var receiver = this.receiver;
+    if (msg.buffers.length > 0) {
+      receiver.consume(msg.buffers[0].buffer)
+    } else {
+      receiver.consume(msg.content.data)
+    }
+    const comm_msg = receiver.message;
+    if ((comm_msg != null) && (doc != null)) {
+      doc.apply_json_patch(comm_msg.content, comm_msg.buffers)
+    }
+  }
+}
+
+// Extend Bokeh widgets with backend specific methods
+extend(BokehSelectionWidget.prototype, BokehMethods);
+extend(BokehScrubberWidget.prototype, BokehMethods);
+
+window.HoloViews.BokehSelectionWidget = BokehSelectionWidget
+window.HoloViews.BokehScrubberWidget = BokehScrubberWidget
+</script>
+<script type="text/javascript">
+    function JupyterCommManager() {
+    }
+
+    JupyterCommManager.prototype.register_target = function(plot_id, comm_id, msg_handler) {
+      if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        comm_manager.register_target(comm_id, function(comm) {
+          comm.on_msg(msg_handler);
+        });
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        window.PyViz.kernels[plot_id].registerCommTarget(comm_id, function(comm) {
+          comm.onMsg = msg_handler;
+        });
+      }
+    }
+
+    JupyterCommManager.prototype.get_client_comm = function(plot_id, comm_id, msg_handler) {
+      if (comm_id in window.PyViz.comms) {
+        return window.PyViz.comms[comm_id];
+      } else if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        var comm = comm_manager.new_comm(comm_id, {}, {}, {}, comm_id);
+        if (msg_handler) {
+          comm.on_msg(msg_handler);
+        }
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        var comm = window.PyViz.kernels[plot_id].connectToComm(comm_id);
+        comm.open();
+        if (msg_handler) {
+          comm.onMsg = msg_handler;
+        }
+      }
+
+      window.PyViz.comms[comm_id] = comm;
+      return comm;
+    }
+
+    window.PyViz.comm_manager = new JupyterCommManager();
+    </script>
+
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+<style>div.bk-hbox {
+    display: flex;
+    justify-content: center;
+}
+
+div.bk-hbox div.bk-plot {
+    padding: 8px;
+}
+
+div.bk-hbox div.bk-data-table {
+    padding: 20px;
+}
+
+div.hololayout {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
+div.holoframe {
+  width: 75%;
+}
+
+div.holowell {
+  display: flex;
+  align-items: center;
+}
+
+form.holoform {
+  background-color: #fafafa;
+  border-radius: 5px;
+  overflow: hidden;
+  padding-left: 0.8em;
+  padding-right: 0.8em;
+  padding-top: 0.4em;
+  padding-bottom: 0.4em;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.05);
+  margin-bottom: 20px;
+  border: 1px solid #e3e3e3;
+}
+
+div.holowidgets {
+  padding-right: 0;
+  width: 25%;
+}
+
+div.holoslider {
+  min-height: 0 !important;
+  height: 0.8em;
+  width: 100%;
+}
+
+div.holoformgroup {
+  padding-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+div.hologroup {
+  padding-left: 0;
+  padding-right: 0.8em;
+  width: 100%;
+}
+
+.holoselect {
+  width: 92%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.holotext {
+  padding-left:  0.5em;
+  padding-right: 0;
+  width: 100%;
+}
+
+.holowidgets .ui-resizable-se {
+  visibility: hidden
+}
+
+.holoframe > .ui-resizable-se {
+  visibility: hidden
+}
+
+.holowidgets .ui-resizable-s {
+  visibility: hidden
+}
+
+
+/* CSS rules for noUISlider based slider used by JupyterLab extension  */
+
+.noUi-handle {
+  width: 20px !important;
+  height: 20px !important;
+  left: -5px !important;
+  top: -5px !important;
+}
+
+.noUi-handle:before, .noUi-handle:after {
+  visibility: hidden;
+  height: 0px;
+}
+
+.noUi-target {
+  margin-left: 0.5em;
+  margin-right: 0.5em;
+}
+</style><div style='display: table; margin: 0 auto;'>
+
+
+
+
+
+
+  <div class="bk-root" id="1edcc6b4-ab6e-474f-9f62-1d8b191abd4e" data-root-id="1128"></div>
+
+<script type="text/javascript">
+  (function(root) {
+  function embed_document(root) {
+    
+  var docs_json = {"77ac0c0d-c431-4be7-99a2-e93b6b88edc5":{"roots":{"references":[{"attributes":{"align":null,"below":[{"id":"1137","type":"LinearAxis"}],"center":[{"id":"1141","type":"Grid"},{"id":"1146","type":"Grid"}],"left":[{"id":"1142","type":"LinearAxis"}],"margin":null,"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_width":800,"renderers":[{"id":"1168","type":"GlyphRenderer"}],"right":[{"id":"1171","type":"ColorBar"}],"sizing_mode":"fixed","title":{"id":"1129","type":"Title"},"toolbar":{"id":"1152","type":"Toolbar"},"x_range":{"id":"1125","type":"Range1d"},"x_scale":{"id":"1133","type":"LinearScale"},"y_range":{"id":"1126","type":"Range1d"},"y_scale":{"id":"1135","type":"LinearScale"}},"id":"1128","subtype":"Figure","type":"Plot"},{"attributes":{},"id":"1138","type":"BasicTicker"},{"attributes":{},"id":"1161","type":"Selection"},{"attributes":{},"id":"1147","type":"SaveTool"},{"attributes":{},"id":"1148","type":"PanTool"},{"attributes":{},"id":"1173","type":"BasicTickFormatter"},{"attributes":{"dimension":1,"grid_line_color":null,"ticker":{"id":"1143","type":"BasicTicker"}},"id":"1146","type":"Grid"},{"attributes":{"high":53423.0,"low":1.0,"palette":["#440154","#440255","#440357","#450558","#45065a","#45085b","#46095c","#460b5e","#460c5f","#460e61","#470f62","#471163","#471265","#471466","#471567","#471669","#47186a","#48196b","#481a6c","#481c6e","#481d6f","#481e70","#482071","#482172","#482273","#482374","#472575","#472676","#472777","#472878","#472a79","#472b7a","#472c7b","#462d7c","#462f7c","#46307d","#46317e","#45327f","#45347f","#453580","#453681","#443781","#443982","#433a83","#433b83","#433c84","#423d84","#423e85","#424085","#414186","#414286","#404387","#404487","#3f4587","#3f4788","#3e4888","#3e4989","#3d4a89","#3d4b89","#3d4c89","#3c4d8a","#3c4e8a","#3b508a","#3b518a","#3a528b","#3a538b","#39548b","#39558b","#38568b","#38578c","#37588c","#37598c","#365a8c","#365b8c","#355c8c","#355d8c","#345e8d","#345f8d","#33608d","#33618d","#32628d","#32638d","#31648d","#31658d","#31668d","#30678d","#30688d","#2f698d","#2f6a8d","#2e6b8e","#2e6c8e","#2e6d8e","#2d6e8e","#2d6f8e","#2c708e","#2c718e","#2c728e","#2b738e","#2b748e","#2a758e","#2a768e","#2a778e","#29788e","#29798e","#287a8e","#287a8e","#287b8e","#277c8e","#277d8e","#277e8e","#267f8e","#26808e","#26818e","#25828e","#25838d","#24848d","#24858d","#24868d","#23878d","#23888d","#23898d","#22898d","#228a8d","#228b8d","#218c8d","#218d8c","#218e8c","#208f8c","#20908c","#20918c","#1f928c","#1f938b","#1f948b","#1f958b","#1f968b","#1e978a","#1e988a","#1e998a","#1e998a","#1e9a89","#1e9b89","#1e9c89","#1e9d88","#1e9e88","#1e9f88","#1ea087","#1fa187","#1fa286","#1fa386","#20a485","#20a585","#21a685","#21a784","#22a784","#23a883","#23a982","#24aa82","#25ab81","#26ac81","#27ad80","#28ae7f","#29af7f","#2ab07e","#2bb17d","#2cb17d","#2eb27c","#2fb37b","#30b47a","#32b57a","#33b679","#35b778","#36b877","#38b976","#39b976","#3bba75","#3dbb74","#3ebc73","#40bd72","#42be71","#44be70","#45bf6f","#47c06e","#49c16d","#4bc26c","#4dc26b","#4fc369","#51c468","#53c567","#55c666","#57c665","#59c764","#5bc862","#5ec961","#60c960","#62ca5f","#64cb5d","#67cc5c","#69cc5b","#6bcd59","#6dce58","#70ce56","#72cf55","#74d054","#77d052","#79d151","#7cd24f","#7ed24e","#81d34c","#83d34b","#86d449","#88d547","#8bd546","#8dd644","#90d643","#92d741","#95d73f","#97d83e","#9ad83c","#9dd93a","#9fd938","#a2da37","#a5da35","#a7db33","#aadb32","#addc30","#afdc2e","#b2dd2c","#b5dd2b","#b7dd29","#bade27","#bdde26","#bfdf24","#c2df22","#c5df21","#c7e01f","#cae01e","#cde01d","#cfe11c","#d2e11b","#d4e11a","#d7e219","#dae218","#dce218","#dfe318","#e1e318","#e4e318","#e7e419","#e9e419","#ece41a","#eee51b","#f1e51c","#f3e51e","#f6e61f","#f8e621","#fae622","#fde724"]},"id":"1159","type":"LogColorMapper"},{"attributes":{},"id":"1143","type":"BasicTicker"},{"attributes":{"fill_alpha":{"value":0.8},"fill_color":{"field":"color","transform":{"id":"1159","type":"LogColorMapper"}},"line_alpha":{"value":0.8},"line_color":{"field":"color","transform":{"id":"1159","type":"LogColorMapper"}},"size":{"units":"screen","value":9},"x":{"field":"unique_tenderers"},"y":{"field":"unique_winners"}},"id":"1164","type":"Scatter"},{"attributes":{"grid_line_color":null,"ticker":{"id":"1138","type":"BasicTicker"}},"id":"1141","type":"Grid"},{"attributes":{},"id":"1133","type":"LinearScale"},{"attributes":{"callback":null,"renderers":[{"id":"1168","type":"GlyphRenderer"}],"tags":["hv_created"],"tooltips":[["unique_tenderers","@{unique_tenderers}"],["unique_winners","@{unique_winners}"],["n_tenders","@{n_tenders}"],["unidad_id","@{unidad_id}"],["entidad_id","@{entidad_id}"]]},"id":"1127","type":"HoverTool"},{"attributes":{"axis_label":"unique_winners","bounds":"auto","formatter":{"id":"1175","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"1143","type":"BasicTicker"}},"id":"1142","type":"LinearAxis"},{"attributes":{"overlay":{"id":"1183","type":"BoxAnnotation"}},"id":"1150","type":"BoxZoomTool"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"1183","type":"BoxAnnotation"},{"attributes":{},"id":"1135","type":"LinearScale"},{"attributes":{},"id":"1175","type":"BasicTickFormatter"},{"attributes":{"fill_alpha":{"value":0.8},"fill_color":{"field":"color","transform":{"id":"1159","type":"LogColorMapper"}},"line_alpha":{"value":0.8},"line_color":{"field":"color","transform":{"id":"1159","type":"LogColorMapper"}},"size":{"units":"screen","value":9},"x":{"field":"unique_tenderers"},"y":{"field":"unique_winners"}},"id":"1165","type":"Scatter"},{"attributes":{"fill_alpha":{"value":0.8},"fill_color":{"field":"color","transform":{"id":"1159","type":"LogColorMapper"}},"line_alpha":{"value":0.8},"line_color":{"field":"color","transform":{"id":"1159","type":"LogColorMapper"}},"size":{"units":"screen","value":9},"x":{"field":"unique_tenderers"},"y":{"field":"unique_winners"}},"id":"1166","type":"Scatter"},{"attributes":{},"id":"1184","type":"UnionRenderers"},{"attributes":{"callback":null,"end":3463.0,"reset_end":3463.0,"reset_start":1.0,"start":1.0,"tags":[[["unique_winners","unique_winners",null]]]},"id":"1126","type":"Range1d"},{"attributes":{"callback":null,"data":{"color":[333,54,141,195,288,204,11,126,547,69,221,227,20,114,25,422,132,97,649,548,102,124,25,347,35,64,14,126,19,107,17,49,3,160,18,122,82,533,1210,23,36,60,459,95,49,76,31,69,45,63,36,49,53,77,34,55,17,18,70,33,13,3,29,12,25,24,9,18,16,3,103,19,25,19,41,17,46,7,17,19,15,18,30,15,8,28,22,24,10,11,90,8,31,30,35,9,19,5,8,30,42,16,6,20,18,16,33,24,128,490,131,23,74,64,45,75,34,51,59,717,119,386,223,634,78,3,307,1,1,6,1,7,8,2,14,2,28,1,9,5,7,15,52,1,2,3,16,537,282,422,80,100,63,67,34,61,94,29,77,113,37,67,73,86,34,72,86,104,42,73,18,91,833,19,54,140,306,86,38,5,6,72,173,52,40,50,15,15,7,6,150,32,27,175,18,22,74,991,21,20,18,25,24,30,18,16,38,42,146,299,579,3,121,9,145,91,281,9,1,141,3,11,1,2,59,2,1,29,1,4,3,2,14,103,1,12,45,4,5,2,60,5,1,166,4,5,5,8,14,52,3,1,7,8,47,22,13,1,1,15,20,4,37,9,8,12,10,51,476,395,3980,4,4,5,4,37,12,1,1,1,18,1,1,5,147,4,1,1,2,1,1,1,9,5,6,1,1,1,6,1,1,1,2,2,1,3,10,10,8,1,15,1,682,1152,368,2,1776,1,4,1525,993,31,179,193,94,384,793,90,389,449,259,26,602,442,200,79,129,147,591,75,98,536,307,1812,290,224,610,1057,131,1053,286,51,1780,8,516,482,42,46,191,156,169,77,95,437,127,1,393,511,1329,2574,123,137,606,142,187,48,33,57,2,124,14,32,14,40,12,7,55,32,5,14,1,11,16,10,74,39,23,58,8,15,4,13,5,51,14,2,8,55,25,1928,45,14,30,8,131,52,215,25,34,2,1,4,10,186,9,5,39,172,116,187,189,59,282,70,78,86,41,15,66,36,67,22,55,78,132,27,63,4,32,9,24,58,20,45,255,137,19,50,17,18,3,18,18,17,69,216,43,17,42,90,46,44,76,7,23,66,83,40,114,37,47,33,190,18,581,122,45,13,114,114,24,27,11,19,62,33,4,133,281,635,41,108,376,314,236,158,472,103,209,521,125,74,37,97,5677,34,5,30,8,55,44,16,2,11,66,12,13,3,453,17,13371,25,90,507,72,31,150,103,42,109,41,159,42,39,24,2192,43,53423,81,229,13,86,602,45,12,104,40,23,36,211,874,52,513,731,210,237,138,176,14,41,4,2,6,7,2,5,4,3,1,1,1,3,3,3,1,3,1,3,5,1,5,3,5,2,160,196,3,100,89,1202,131,2510,245,40,338,89,181,168,1490,21,49,1,230,690,11,1607,370,125,226,273,3,954,25,210,229,1019,723,285,96,52,726,89,3,281,262,785,679,592,548,1270,463,1465,576,427,399,290,985,265,620,312,521,476,370,668,545,810,163,569,637,339,247,894,393,919,498,380,38,273,14,130,75,437,46,532,699,140,510,287,337,49,28,25,516,3,374,1139,52,23,20,177,1,29,457,111,32,205,36,80,360,337,8,2,381,20,18,66,5,42,242,38,42,119,460,158,61,17,179,21,13,44,26,68,6,205,3,33,121,42,109,35,31,2,17,2,224,33,159,40,326,849,624,1013,430,1202,485,20,338,371,184,1439,43,101,2098,76,167,613,255,920,23,4506,317,1004,1759,95,2615,7,246,11788,165,413,54,153,2,12,2,82,216,412,190,45,66,728,5,2,2,1,1,5,10,11,2,5,8,62,11,4,1,4,6,1,669,200,1142,151,44,138,117,98,172,80,14,75,179,145,94,66,42,35,171,5710,776,381,97,73,41,452,1139,145,625,209,2,443,19,344,1535,253,14,25,40,37,68,10,3,18,1,2,33,5,7,15,6,4,38,7,3,3,185,420,7,1436,1146,379,33,230,131,475,392,29,240,48,604,212,164,413,708,155,34,84,249,62,121,132,2853,60,129,142,711,188,14,102,9,88,190,260,885,251,1735,153,255,128,194,937,215,193,53,2,326,17,407,120,82,82,54,40,248,492,116,31,177,188,54,194,4,5,215,241,81,222,13,202,15,1735,87,375,59,232,160,97,57,12,1063,47,34,154,152,8,139,327,441,110,23,279,205,312,98,248,175,157,143,163,141,16,81,133,83,39,14,13,12,22,2,31,6,10,4,23,4,21,2,2,7,2,1,608,461,1,114,21,385,4,101,8,163,2215,389,21,5,6,22,12,6,11,12,19,9,5,12,11,6,35,19,20,11,2,12,9,20,7,10,5,8,8,4,2,5,5,23,323,36,31,43,25,17,13,15,19,5,13,7,22,5,1,10,15,33,42,13,8,7,56,13,16,11,19,7,11,445,44,77,48,13,126,244,456,87,142,2,9,2,5,2,14,5,20,6,3,7,127,167,359,471,191,49,52,37,63,55,63,12,13,59,26,31,60,24,25,36,39,38,45,27,27,12,43,18,53,29,21,52,19,20,16,22,69,114,10,4,6,12,17,13,11,11,6,4,20,5,6,9,9,8,13,10,3,11,6,10,8,12,11,10,7,8,10,14,19,5,66,4,32,9,27,32,90,3,12,56,7,25,18,39,12,59,11,1,32,30,17,3,3,16,111,31,78,12,10,26,27,113,28,553,208,87,171,73,64,96,78,264,34,114,266,26,172,105,183,260,189,185,9,53,106,27,135,75,132,270,111,192,62,99,111,171,327,67,248,84,163,36,71,52,53,20,52,19,8,45,44,37,61,64,41,48,28,29,50,36,52,58,30,79,59,31,60,53,31,21,35,21,49,311,9,180,1,772,7,17,3,612,242,13,125,2,125,126,774,33,24,2,41,19,2,16,222,151,50,104,186,27,3,222,137,45,189,35,136,48,204,211,1,171,121,48,152,106,55,189,519,37,381,37,60,93,77,38,114,46,33,285,158,226,110,29,248,417,135,55,21,168,220,327,214,61,28,15,6,515,226,6101,5,406,596,489,1223,16,15,9,13,47,14,14,25,52,2,16,74,2,2,5,436,1,6,1,45,2,229,79,48,6857,12,15,3,2,2,16,419,66,3,2,11,4,13,1,7,2,22,475,551,128,1,6,15,285,288,27,293,2884,874,174,14,424,15,106,245,69,112,136,451,7,321,4,47,2027,4,13,3,11,13,19,40,17,14,5,8,21,40,14,9,21,24,31,11,16,10,23,9,22,18,5,46,10,18,33,18,5,23,10,279,3,7,156,5,9,11,13,21,16,12,5,7,13,2,5,5,9,4,7,5,11,8,14,8,7,4,387,1349,583,114,125,168],"entidad_id":["AEFCM-2","AEM-21","AGN-25","AGROASEMEX-22","AICM-19","AICM-19","APBP-1","API-Altamira-3","API-Altamira-3","API-Coatzacoalcos-4","API-Coatzacoalcos-4","API-Dos Bocas-5","API-Dos Bocas-5","API-Ensenada-6","API-Ensenada-6","API-Guaymas-7","API-Guaymas-7","API-L\u00e1zaro C\u00e1rdenas-8","API-L\u00e1zaro C\u00e1rdenas-8","API-Manzanillo-9","API-Manzanillo-9","API-Mazatl\u00e1n-10","API-Mazatl\u00e1n-10","API-Progreso-11","API-Progreso-11","API-Puerto Madero-12","API-Puerto Madero-12","API-Puerto Vallarta-13","API-Puerto Vallarta-13","API-Salina Cruz-14","API-Salina Cruz-14","API-Tampico-15","API-Tampico-15","API-Topolobampo-16","API-Topolobampo-16","API-Tuxpan-17","API-Tuxpan-17","API-Veracruz-18","API-Veracruz-18","APRENDEMX-327","ARTF-329","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASA-20","ASEA-326","ASERCA-24","ASERCA-24","ASERCA-24","ASERCA-24","ASERCA-24","ASERCA-24","ASERCA-24","ASERCA-24","ASERCA-24","ASERCA-24","BANCOMEXT-27","BANJERCITO-30","BANJERCITO-30","BANJERCITO-30","BANOBRAS-29","BANOBRAS-29","BANOBRAS-29","BANSEFI-26","BANSEFI-26","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIENESTAR-263","BIRMEX-230","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CAPUFE-31","CCC-33","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CDI-97","CEAV-314","CECUTT-106","CENACE-323","CENACE-323","CENACE-323","CENACE-323","CENACE-323","CENACE-323","CENACE-323","CENACE-323","CENACE-323","CENACE-323","CENACE-323","CENAGAS-325","CENAM-58","CENAM-58","CENAPRECE-61","CENETEC-56","CENSIDA-63","CENTROGEO-41","CETI-34","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CFE-76","CIAD-40","CIAD-40","CIATEC-67","CIATEJ-45","CIATEQ-68","CIBNOR-51","CIBNOR-51","CICESE-39","CICESE-39","CICY-38","CIDE-48","CIDESI-37","CIDETEQ-47","CIESAS-53","CIJ-66","CIJ-66","CIMAT-42","CIMAV-43","CINVESTAV-46","CINVESTAV-46","CINVESTAV-46","CINVESTAV-46","CINVESTAV-46","CINVESTAV-46","CINVESTAV-46","CINVESTAV-46","CINVESTAV-46","CINVESTAV-46","CIO-52","CIQA-44","CISEN-50","CJEF-107","CMM-32","CNB-84","CNBV-80","CNEGSR-55","CNH-86","CNPSS-90","CNSF-92","CNSNS-91","CNTS-57","COFAA-74","COFAA-74","COFECE-75","COFEPRIS-79","COLBACH-69","COLBACH-69","COLEF-122","COLMICH-125","COLPOS-70","COLSAN-126","COMESA-105","COMIMSA-119","CONACYT-110","CONADE-85","CONADESUCA-104","CONADIC-316","CONADIS-315","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFE-112","CONAFOR-96","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONAGUA-94","CONALEP-71","CONALEP-71","CONALITEG-88","CONALITEG-88","CONAMED-82","CONAMER-77","CONAMPROS-103","CONANP-83","CONANP-83","CONANP-83","CONANP-83","CONANP-83","CONANP-83","CONANP-83","CONANP-83","CONAPESCA-81","CONAPESCA-81","CONAPRED-114","CONASAMI-89","CONAVI-93","CONAZA-87","CONDUSEF-99","CONEVAL-111","CONOCER-135","CONSAR-95","CONUEE-98","CPTM-109","CRAE-65","CRE-102","CSAEGRO-72","CULTURA-113","CULTURA-113","CULTURA-113","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DICONSA-120","DIF-296","DIF-296","DIF-296","ECHASA-127","ECOSUR-123","ECOSUR-123","ECOSUR-123","ECOSUR-123","ECOSUR-123","ECOSUR-123","EDUCAL-121","ESSA-128","ESSA-128","FCE-148","FICINE-141","FIDENA-134","FIFOMI-133","FIFONAFE-138","FIRA-151","FIRA-151","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIRCO-136","FIT-131","FND-142","FND-142","FOCIR-147","FOMMUR-137","FONART-158","FONATUR Constructora-143","FONATUR Mantenimiento-144","FONATUR Operadora-145","FONATUR TREN MAYA-145","FONATUR-157","FONHAPO-139","HG-161","HG-161","HGM-162","HGM-162","HGM-162","HGM-162","HIM-163","HIM-163","HIM-163","HJM-164","HRAEB-168","HRAEI-320","HRAEO-167","HRAEPY-166","HRAEPY-166","HRAEV-165","IEPSA-170","IFAI-184","IFT-78","IMCINE-186","IMER-189","IMJ-187","IMP-191","IMP-191","IMP-191","IMP-191","IMP-191","IMPI-188","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMSS-192","IMT-193","IMTA-190","IMTA-190","INACIPE-201","INADEM-322","INAES-116","INAH-195","INAH-195","INALI-212","INAOE-196","INAPAM-211","INAPESCA-209","INBAL-197","INBAL-197","INCA RURAL-222","INCAN-198","INCARD-199","INCARURAL-222","INCMNSZ-200","INCMNSZ-200","INDAABIN-173","INDAABIN-173","INDESOL-202","INEA-224","INEA-224","INEA-224","INEA-224","INEA-224","INEA-224","INEA-224","INECC-203","INECOL-175","INECOL-175","INECOL-175","INEE-225","INEEL-178","INEEL-178","INEEL-178","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INEGI-313","INER-204","INER-204","INFONACOT-183","INFOTEC-153","INGER-176","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFAP-206","INIFED-208","INIFED-208","ININ-207","ININ-207","ININ-207","INM-214","INM-214","INMEGEN-213","INMUJERES-210","INNN-215","INNN-215","INNN-215","INP-216","INP-216","INPER-217","INPI-216","INPI-216","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPI-97","INPSIQ-218","INPSIQ-218","INR-219","INR-219","INSP-220","INSP-220","INSP-220","INSUS-101","IPAB-227","IPICYT-229","IPN-228","IPN-228","ISSFAM-180","ISSFAM-180","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","ISSSTE-181","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LICONSA-231","LOTENAL-232","MORA-177","NAFIN-233","NAFIN-233","NAFIN-233","NAFIN-233","NAFIN-233","NAFIN-233","NAFIN-233","NOTIMEX-234","OnceTV-311","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PA-246","PF-243","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","PGR-251","POI-237","POI-237","PR-244","PR-244","PR-244","PRODECON-247","PROFECO-250","PROFEDET-248","PROFEPA-249","PROFEPA-249","PROFEPA-249","PROFEPA-249","PROFEPA-249","PROFEPA-249","PROFEPA-249","PROFEPA-249","PROFEPA-249","PROFEPA-249","PROFEPA-249","PROFEPA-249","PROMEXICO-255","PROMTEL-328","PRONABIVE-252","PRONOSTICOS-256","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PROSPERA-117","PRS-245","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","RAN-258","SACM-293","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SADER-261","SAE-285","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAGARPA-261","SAP-295","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SAT-284","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCT-262","SCVSHF-283","SE-264","SE-264","SECTUR-277","SEDATU-271","SEDATU-271","SEDENA-269","SEDENA-269","SEDENA-269","SEDENA-269","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEDESOL-263","SEGOB-267","SEGOB-267","SEMAR-272","SEMAR-272","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SEMARNAT-273","SENASICA-290","SENEAM-292","SENER-266","SEP-265","SEP-265","SEP-265","SEP-265","SEPOMEX-291","SESNA-330","SESNSP-282","SFP-270","SGM-288","SHCP-268","SHCP-268","SHCP-268","SHCP-268","SHCP-268","SHF-297","SIAP-286","SNICS-289","SPF-287","SPR-235","SRE-274","SRE-274","SSA-275","SSA-275","SSA-275","SSA-275","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","STPS-278","TECNM-324","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TELECOMM-299","TFJA-304","TGM-298","TVMETRO-300","Tribunales Agrarios-305","UPN-310","ZEE-331"],"n_tenders":[333,54,141,195,288,204,11,126,547,69,221,227,20,114,25,422,132,97,649,548,102,124,25,347,35,64,14,126,19,107,17,49,3,160,18,122,82,533,1210,23,36,60,459,95,49,76,31,69,45,63,36,49,53,77,34,55,17,18,70,33,13,3,29,12,25,24,9,18,16,3,103,19,25,19,41,17,46,7,17,19,15,18,30,15,8,28,22,24,10,11,90,8,31,30,35,9,19,5,8,30,42,16,6,20,18,16,33,24,128,490,131,23,74,64,45,75,34,51,59,717,119,386,223,634,78,3,307,1,1,6,1,7,8,2,14,2,28,1,9,5,7,15,52,1,2,3,16,537,282,422,80,100,63,67,34,61,94,29,77,113,37,67,73,86,34,72,86,104,42,73,18,91,833,19,54,140,306,86,38,5,6,72,173,52,40,50,15,15,7,6,150,32,27,175,18,22,74,991,21,20,18,25,24,30,18,16,38,42,146,299,579,3,121,9,145,91,281,9,1,141,3,11,1,2,59,2,1,29,1,4,3,2,14,103,1,12,45,4,5,2,60,5,1,166,4,5,5,8,14,52,3,1,7,8,47,22,13,1,1,15,20,4,37,9,8,12,10,51,476,395,3980,4,4,5,4,37,12,1,1,1,18,1,1,5,147,4,1,1,2,1,1,1,9,5,6,1,1,1,6,1,1,1,2,2,1,3,10,10,8,1,15,1,682,1152,368,2,1776,1,4,1525,993,31,179,193,94,384,793,90,389,449,259,26,602,442,200,79,129,147,591,75,98,536,307,1812,290,224,610,1057,131,1053,286,51,1780,8,516,482,42,46,191,156,169,77,95,437,127,1,393,511,1329,2574,123,137,606,142,187,48,33,57,2,124,14,32,14,40,12,7,55,32,5,14,1,11,16,10,74,39,23,58,8,15,4,13,5,51,14,2,8,55,25,1928,45,14,30,8,131,52,215,25,34,2,1,4,10,186,9,5,39,172,116,187,189,59,282,70,78,86,41,15,66,36,67,22,55,78,132,27,63,4,32,9,24,58,20,45,255,137,19,50,17,18,3,18,18,17,69,216,43,17,42,90,46,44,76,7,23,66,83,40,114,37,47,33,190,18,581,122,45,13,114,114,24,27,11,19,62,33,4,133,281,635,41,108,376,314,236,158,472,103,209,521,125,74,37,97,5677,34,5,30,8,55,44,16,2,11,66,12,13,3,453,17,13371,25,90,507,72,31,150,103,42,109,41,159,42,39,24,2192,43,53423,81,229,13,86,602,45,12,104,40,23,36,211,874,52,513,731,210,237,138,176,14,41,4,2,6,7,2,5,4,3,1,1,1,3,3,3,1,3,1,3,5,1,5,3,5,2,160,196,3,100,89,1202,131,2510,245,40,338,89,181,168,1490,21,49,1,230,690,11,1607,370,125,226,273,3,954,25,210,229,1019,723,285,96,52,726,89,3,281,262,785,679,592,548,1270,463,1465,576,427,399,290,985,265,620,312,521,476,370,668,545,810,163,569,637,339,247,894,393,919,498,380,38,273,14,130,75,437,46,532,699,140,510,287,337,49,28,25,516,3,374,1139,52,23,20,177,1,29,457,111,32,205,36,80,360,337,8,2,381,20,18,66,5,42,242,38,42,119,460,158,61,17,179,21,13,44,26,68,6,205,3,33,121,42,109,35,31,2,17,2,224,33,159,40,326,849,624,1013,430,1202,485,20,338,371,184,1439,43,101,2098,76,167,613,255,920,23,4506,317,1004,1759,95,2615,7,246,11788,165,413,54,153,2,12,2,82,216,412,190,45,66,728,5,2,2,1,1,5,10,11,2,5,8,62,11,4,1,4,6,1,669,200,1142,151,44,138,117,98,172,80,14,75,179,145,94,66,42,35,171,5710,776,381,97,73,41,452,1139,145,625,209,2,443,19,344,1535,253,14,25,40,37,68,10,3,18,1,2,33,5,7,15,6,4,38,7,3,3,185,420,7,1436,1146,379,33,230,131,475,392,29,240,48,604,212,164,413,708,155,34,84,249,62,121,132,2853,60,129,142,711,188,14,102,9,88,190,260,885,251,1735,153,255,128,194,937,215,193,53,2,326,17,407,120,82,82,54,40,248,492,116,31,177,188,54,194,4,5,215,241,81,222,13,202,15,1735,87,375,59,232,160,97,57,12,1063,47,34,154,152,8,139,327,441,110,23,279,205,312,98,248,175,157,143,163,141,16,81,133,83,39,14,13,12,22,2,31,6,10,4,23,4,21,2,2,7,2,1,608,461,1,114,21,385,4,101,8,163,2215,389,21,5,6,22,12,6,11,12,19,9,5,12,11,6,35,19,20,11,2,12,9,20,7,10,5,8,8,4,2,5,5,23,323,36,31,43,25,17,13,15,19,5,13,7,22,5,1,10,15,33,42,13,8,7,56,13,16,11,19,7,11,445,44,77,48,13,126,244,456,87,142,2,9,2,5,2,14,5,20,6,3,7,127,167,359,471,191,49,52,37,63,55,63,12,13,59,26,31,60,24,25,36,39,38,45,27,27,12,43,18,53,29,21,52,19,20,16,22,69,114,10,4,6,12,17,13,11,11,6,4,20,5,6,9,9,8,13,10,3,11,6,10,8,12,11,10,7,8,10,14,19,5,66,4,32,9,27,32,90,3,12,56,7,25,18,39,12,59,11,1,32,30,17,3,3,16,111,31,78,12,10,26,27,113,28,553,208,87,171,73,64,96,78,264,34,114,266,26,172,105,183,260,189,185,9,53,106,27,135,75,132,270,111,192,62,99,111,171,327,67,248,84,163,36,71,52,53,20,52,19,8,45,44,37,61,64,41,48,28,29,50,36,52,58,30,79,59,31,60,53,31,21,35,21,49,311,9,180,1,772,7,17,3,612,242,13,125,2,125,126,774,33,24,2,41,19,2,16,222,151,50,104,186,27,3,222,137,45,189,35,136,48,204,211,1,171,121,48,152,106,55,189,519,37,381,37,60,93,77,38,114,46,33,285,158,226,110,29,248,417,135,55,21,168,220,327,214,61,28,15,6,515,226,6101,5,406,596,489,1223,16,15,9,13,47,14,14,25,52,2,16,74,2,2,5,436,1,6,1,45,2,229,79,48,6857,12,15,3,2,2,16,419,66,3,2,11,4,13,1,7,2,22,475,551,128,1,6,15,285,288,27,293,2884,874,174,14,424,15,106,245,69,112,136,451,7,321,4,47,2027,4,13,3,11,13,19,40,17,14,5,8,21,40,14,9,21,24,31,11,16,10,23,9,22,18,5,46,10,18,33,18,5,23,10,279,3,7,156,5,9,11,13,21,16,12,5,7,13,2,5,5,9,4,7,5,11,8,14,8,7,4,387,1349,583,114,125,168],"unidad_id":["SAF121101UT3-011C00999","AEM1007317T7-009JZN996","AGN120124321-004EZN999","AGR900605VC6-006GSA001","AIC980601988-009KDN001","AIC980601988-009KDN002","SSA630502CU1-012E00996","API931215HZ3-009J2Y001","API931215HZ3-009J2Y002","API940725BE7-009J3F001","API940725BE7-009J3F002","API990812BZ0-009J2P001","API990812BZ0-009J2P002","API940622CE0-009J2R001","API940622CE0-009J2R002","AASJ751007BU-009J2Z001","API931215JS0-009J2Z999","API9312151X4-009J3A002","API931215IX4-009J3A001","API931215862-009J3B001","API931215862-009J3B002","API940722EI2-009J2T001","API940722EI2-009J2T002","API940504EP0-009J2U001","API940504EP0-009J2U002","API9312141L8-009J3C001","API9312141L8-009J3C002","API9406271S5-009J2V001","API9406271S5-009J2V002","API940725CBA-009J3G001","API940725CBA-009J3G999","API931214FD4-009J3D001","API931214FD4-009J3D002","API940722G85-009J2W001","API940722G85-009J2W002","API940722K33-009J2X001","API940722K33-009J2X002","API931215CSA-009J3E001","API931215CSA-009J3E002","SEP210905778-011N00999","ART160819ET6-009D00999","ASA6506102U9-009JZL001","ASA6506102U9-009JZL002","ASA6506102U9-009JZL003","ASA6506102U9-009JZL004","ASA6506102U9-009JZL005","ASA6506102U9-009JZL006","ASA6506102U9-009JZL007","ASA6506102U9-009JZL008","ASA6506102U9-009JZL009","ASA6506102U9-009JZL010","ASA6506102U9-009JZL011","ASA6506102U9-009JZL012","ASA6506102U9-009JZL013","ASA6506102U9-009JZL014","ASA6506102U9-009JZL015","ASA6506102U9-009JZL016","ASA6506102U9-009JZL017","ASA6506102U9-009JZL018","ASA6506102U9-009JZL019","ASA6506102U9-009JZL020","ASA6506102U9-009JZL021","ASA6506102U9-009JZL022","ASA6506102U9-009JZL023","ASA6506102U9-009JZL024","ASA6506102U9-009JZL025","ASA6506102U9-009JZL026","ASA6506102U9-009JZL027","ASA6506102U9-009JZL028","ASA6506102U9-009JZL029","ASA6506102U9-009JZL030","ASA6506102U9-009JZL031","ASA6506102U9-009JZL032","ASA6506102U9-009JZL033","ASA6506102U9-009JZL034","ASA6506102U9-009JZL035","ASA6506102U9-009JZL036","ASA6506102U9-009JZL037","ASA6506102U9-009JZL040","ASA6506102U9-009JZL041","ASA6506102U9-009JZL042","ASA6506102U9-009JZL043","ASA6506102U9-009JZL044","ASA6506102U9-009JZL045","ASA6506102U9-009JZL046","ASA6506102U9-009JZL047","ASA6506102U9-009JZL048","ASA6506102U9-009JZL979","ASA6506102U9-009JZL980","ASA6506102U9-009JZL981","ASA6506102U9-009JZL982","ASA6506102U9-009JZL983","ASA6506102U9-009JZL984","ASA6506102U9-009JZL985","ASA6506102U9-009JZL986","ASA6506102U9-009JZL987","ASA6506102U9-009JZL988","ASA6506102U9-009JZL989","ASA6506102U9-009JZL990","ASA6506102U9-009JZL991","ASA6506102U9-009JZL992","ASA6506102U9-009JZL994","ASA6506102U9-009JZL995","ASA6506102U9-009JZL996","ASA6506102U9-009JZL997","ASA6506102U9-009JZL998","ASA6506102U9-009JZL999","CALS750508AB-009JZL038","ANS1408122K6-016G00999","ASC910416PK9-008F00001","ASC910416PK9-008F00003","ASC910416PK9-008F00004","ASC910416PK9-008F00993","ASC910416PK9-008F00994","ASC910416PK9-008F00995","ASC910416PK9-008F00996","ASC910416PK9-008F00997","ASC910416PK9-008F00998","ASC910416PK9-008F00999","BNC8507311M4-006G0N001","BNE820901682-006G1H001","BNE820901682-006G1H002","BNE820901682-006G1H003","BNO670315CD0-006G1C001","BNO670315CD0-006G1C003","BNO670315CD0-006G1C997","BAN500901167-006HJO001","BAN500901167-006HJO999","SDS040719E51-020000884","SDS0602094P8-020000008","SDS0602097FA-020000023","SDS0602098F7-020000005","SDS0602098Q5-020000020","SDS060209928-020000027","SDS060209979-020000004","SDS060209BW6-020000014","SDS060209C70-020000992","SDS060209D94-020000012","SDS060209NL5-020000010","SDS9205222D2-020000028","SDS920522F6A-020000018","SDS920522L71-020000017","SDS920522L71-020000999","SDS920522PD7-020000876","SDS920522TI7-020000002","SDS920525612-020000870","SDS920525FT5-020000003","LBR990311Q29-012NEF001","CPF6307036N8-009J0U001","CPF6307036N8-009J0U002","CPF6307036N8-009J0U003","CPF6307036N8-009J0U004","CPF6307036N8-009J0U005","CPF6307036N8-009J0U006","CPF6307036N8-009J0U007","CPF6307036N8-009J0U008","CPF6307036N8-009J0U009","CPF6307036N8-009J0U010","CPF6307036N8-009J0U011","CPF6307036N8-009J0U012","CPF6307036N8-009J0U013","CPF6307036N8-009J0U014","CPF6307036N8-009J0U016","CPF6307036N8-009J0U017","CPF6307036N8-009J0U018","CPF6307036N8-009J0U019","CPF6307036N8-009J0U021","CPF6307036N8-009J0U022","CPF6307036N8-009J0U023","CPF6307036N8-009J0U024","CPF6307036N8-009J0U025","CPF6307036N8-009J0U027","CCC750715H37-048L3N001","CDN481110H94-047AYB002","CDN481110H94-047AYB012","CND481110H94-047AYB001","CND481110H94-047AYB003","CND481110H94-047AYB004","CND481110H94-047AYB005","CND481110H94-047AYB006","CND481110H94-047AYB007","CND481110H94-047AYB010","CND481110H94-047AYB011","CND481110H94-047AYB013","CND481110H94-047AYB014","CND481110H94-047AYB015","CND481110H94-047AYB016","CND481110H94-047AYB017","CND481110H94-047AYB018","CND481110H94-047AYB019","CND481110H94-047AYB020","CND481110H94-047AYB021","CND481110H94-047AYB996","CND481110H94-047AYB997","CND481110H94-047AYB998","CND481110H94-047AYB999","PSA110907866-006AYJ999","OCC800922SY8-048L6U001","CNC140828PQ4-018TOM988","CNC140828PQ4-018TOM989","CNC140828PQ4-018TOM990","CNC140828PQ4-018TOM992","CNC140828PQ4-018TOM993","CNC140828PQ4-018TOM994","CNC140828PQ4-018TOM995","CNC140828PQ4-018TOM996","CNC140828PQ4-018TOM997","CNC140828PQ4-018TOM998","CNC140828PQ4-018TOM999","CNC140829256-018TON999","CNM880126ML4-010K2H001","CNM880126ML4-010K2H002","SSA630502CU1-012O00999","SSA630502CU1-012T00999","SSA630502CU1-012K00999","CIG800225SM4-03890A999","CET830408PL2-011L3P001","CFD081230D85-018TOQ854","CFE370814QI0-018TOQ002","CFE370814QI0-018TOQ003","CFE370814QI0-018TOQ005","CFE370814QI0-018TOQ007","CFE370814QI0-018TOQ010","CFE370814QI0-018TOQ021","CFE370814QI0-018TOQ024","CFE370814QI0-018TOQ025","CFE370814QI0-018TOQ029","CFE370814QI0-018TOQ032","CFE370814QI0-018TOQ033","CFE370814QI0-018TOQ040","CFE370814QI0-018TOQ041","CFE370814QI0-018TOQ044","CFE370814QI0-018TOQ045","CFE370814QI0-018TOQ051","CFE370814QI0-018TOQ053","CFE370814QI0-018TOQ054","CFE370814QI0-018TOQ057","CFE370814QI0-018TOQ059","CFE370814QI0-018TOQ060","CFE370814QI0-018TOQ062","CFE370814QI0-018TOQ064","CFE370814QI0-018TOQ065","CFE370814QI0-018TOQ075","CFE370814QI0-018TOQ076","CFE370814QI0-018TOQ080","CFE370814QI0-018TOQ081","CFE370814QI0-018TOQ082","CFE370814QI0-018TOQ083","CFE370814QI0-018TOQ087","CFE370814QI0-018TOQ092","CFE370814QI0-018TOQ093","CFE370814QI0-018TOQ094","CFE370814QI0-018TOQ095","CFE370814QI0-018TOQ098","CFE370814QI0-018TOQ099","CFE370814QI0-018TOQ101","CFE370814QI0-018TOQ102","CFE370814QI0-018TOQ106","CFE370814QI0-018TOQ107","CFE370814QI0-018TOQ114","CFE370814QI0-018TOQ118","CFE370814QI0-018TOQ119","CFE370814QI0-018TOQ120","CFE370814QI0-018TOQ122","CFE370814QI0-018TOQ126","CFE370814QI0-018TOQ128","CFE370814QI0-018TOQ129","CFE370814QI0-018TOQ130","CFE370814QI0-018TOQ729","CFE370814QI0-018TOQ730","CFE370814QI0-018TOQ731","CFE370814QI0-018TOQ733","CFE370814QI0-018TOQ736","CFE370814QI0-018TOQ737","CFE370814QI0-018TOQ746","CFE370814QI0-018TOQ747","CFE370814QI0-018TOQ759","CFE370814QI0-018TOQ782","CFE370814QI0-018TOQ784","CFE370814QI0-018TOQ795","CFE370814QI0-018TOQ797","CFE370814QI0-018TOQ804","CFE370814QI0-018TOQ809","CFE370814QI0-018TOQ831","CFE370814QI0-018TOQ837","CFE370814QI0-018TOQ848","CFE370814QI0-018TOQ856","CFE370814QI0-018TOQ862","CFE370814QI0-018TOQ866","CFE370814QI0-018TOQ868","CFE370814QI0-018TOQ870","CFE370814QI0-018TOQ875","CFE370814QI0-018TOQ903","CFE370814QI0-018TOQ910","CFE370814QI0-018TOQ913","CFE370814QI0-018TOQ914","CFE370814QI0-018TOQ917","CFE370814QI0-018TOQ925","CFE370814QI0-018TOQ930","CFE370814QI0-018TOQ941","CFE370814QI0-018TOQ942","CFE370814QI0-018TOQ946","CFE370814QI0-018TOQ955","CFE370814QI0-018TOQ957","CFE370814QI0-018TOQ966","CFE370814QI0-018TOQ967","CFE370814QI0-018TOQ968","CFE370814QI0-018TOQ969","CFE370814QI0-018TOQ972","CFE370814QI0-018TOQ988","CFE370814QI0-018TOQ992","CFE370814QI0-018TOQ994","CGI160330CW4-018TOQ725","CGI160330KL4-018TOQ726","CGI160330TB5-018TOQ728","CGV160330D98-018TOQ724","CGV160330JS5-018TOQ727","CGV160330JS5-018TOQ771","CGV160330JS5-018TOQ901","CTR160330L76-018TOQ732","CIA820316TI4-0389ZY998","CIA830216TI4-0389ZY999","CIA940610MS9-03890G999","CIA760825SU4-03890I001","CIA781109US4-03890Y999","CIB940530C73-03890O001","CIB940530C73-03890O002","CIC7309189G8-0389ZW001","CIC7309189G8-0389ZW002","CIC791116770-03890Q010","CID74112584A-03890M001","CID840309UG7-0389ZU001","CID910926P7A-03890K001","CIE800912J23-03890W999","CIJ731003QK3-012M7K001","CIJ731003QK3-012M7K002","CIM800416NL8-03890C999","CIM941025MJ1-03890E999","CIE6010281U2-011L4J990","CIE6010281U2-011L4J991","CIE6010281U2-011L4J992","CIE6010281U2-011L4J993","CIE6010281U2-011L4J994","CIE6010281U2-011L4J995","CIE6010281U2-011L4J996","CIE6010281U2-011L4J997","CIE6010281U2-011L4J998","CIE6010281U2-011L4J999","CIO8004181K5-03890S999","CIQ7611022G2-03890U001","SGO8501012H2-004I00001","CJE9605167L7-037000001","CMM860120KI1-006G2T002","SSA630502CU1-012V00999","CNB950501PT6-006B00001","SSA630502CU1-012L00001","CNH0811293N6-046D00999","SSA630502CU1-012U00999","CNS901213D90-006C00001","CNS7901262Y0-018A00001","SSA630502CU1-012I00999","COF670302DQ8-011L6H001","COF670302DQ8-011L6H002","CFD130910CH7-041A00001","SSA630502CU1-012S00001","CBA7309268S8-011L5N001","CBA7309268S8-011L5N002","CFN860206338-03891C999","CMI790115LRA-03891I999","CPO590222VE9-008IZC999","CSL970122SUA-03891K999","MEX6811122Q9-018TQA001","CMI9112136K2-03891A003","CNC701230PD0-03890X001","CNC030224ES6-011L6I001","CND050823L23-008AFU999","SSA630502CU1-012X00999","CND110530LQ1-020VRW999","CFN710911GT6-011L6W980","CNF710911GT6-011L6W001","CNF710911GT6-011L6W004","CNF710911GT6-011L6W005","CNF710911GT6-011L6W007","CNF710911GT6-011L6W008","CNF710911GT6-011L6W972","CNF710911GT6-011L6W973","CNF710911GT6-011L6W974","CNF710911GT6-011L6W975","CNF710911GT6-011L6W976","CNF710911GT6-011L6W977","CNF710911GT6-011L6W978","CNF710911GT6-011L6W979","CNF710911GT6-011L6W981","CNF710911GT6-011L6W983","CNF710911GT6-011L6W984","CNF710911GT6-011L6W985","CNF710911GT6-011L6W986","CNF710911GT6-011L6W987","CNF710911GT6-011L6W988","CNF710911GT6-011L6W989","CNF710911GT6-011L6W990","CNF710911GT6-011L6W991","CNF710911GT6-011L6W992","CNF710911GT6-011L6W993","CNF710911GT6-011L6W994","CNF710911GT6-011L6W995","CNF710911GT6-011L6W996","CNF710911GT6-011L6W998","CNF710911GT6-011L6W999","CNF010405EG1-016RHQ001","CNA060621LL7-016B00040","CNA060621LL7-016B00060","CNA890116E6A-016B00049","CNA890116E6A-016B00990","CNA890116SF2-016B00009","CNA890116SF2-016B00015","CNA890116SF2-016B00019","CNA890116SF2-016B00030","CNA890116SF2-016B00035","CNA890116SF2-016B00036","CNA890116SF2-016B00045","CNA890116SF2-016B00057","CNA890116SF2-016B00063","CNA890116SF2-016B00985","CNA890116SF2-016B00986","CNA890116SF2-016B00988","CNA890116SF2-016B00995","CNA890116SF2-016B00999","SCA0606217D6-016B00004","SCA0606217D6-016B00013","SMA001013BN2-016B00008","SMA001013BN2-016B00042","SMA001013UH9-016B00001","SMA001013UH9-016B00029","SMA0010142P3-016B00022","SMA0010142P3-016B00038","SMA0301211S0-016B00043","SMA030121QQ9-016B00058","SMA030121QQ9-016B00059","SMA060309129-016B00017","SMA060309129-016B00026","SMA060309B96-016B00012","SMA060309B96-016B00031","SMA060309BN1-016B00997","SMA0606213C6-016B00006","SMA0606213F1-016B00007","SMA0606213F1-016B00047","SMA0606215V0-016B00050","SMA0606215V0-016B00055","SMA060621669-016B00044","SMA060621669-016B00061","SMA060621GN1-016B00024","SMA060621GN1-016B00066","SMA060621KVA-016B00037","SMA060621NE9-016B00016","SMA060621NE9-016B00033","SMA060626881-016B00018","SMA060626881-016B00032","SMA061101AJ5-016B00020","SMA061101AJ5-016B00989","SMA8901161I8-016B00065","SMA8901161N0-016B00025","SMA8901161N0-016B00046","SMA890116216-016B00005","SMA890116216-016B00023","SMA8901162I7-016B00011","SMA890116AXA-016B00051","SMA890116BW9-016B00041","SMA890116BW9-016B00048","SMA890116GU9-016B00003","SMA890116GU9-016B00992","SMA890116I54-016B00010","SMA890116I54-016B00034","SMA890116PDO-016B00053","SMA890116PDO-016B00998","SMA890116R9A-016B00002","SMA890116R9A-016B00021","SMA8901173A2-016B00014","SMA8901173A2-016B00028","SMA941228DD9-016B00052","SMA941228DD9-016B00054","SMA941228QN4-016B00996","CNE781229BK4-011L5X001","CNE781229BK4-011L5X002","CNL590212RL8-011L6J001","CNL590212RL8-011L6J999","SSA630502CU1-012M00001","CFM0005198Z0-010B00999","CNM740403HX5-014B00001","SMA941228Q63-016F00001","SMA941228Q63-016F00002","SMA941228Q63-016F00003","SMA941228Q63-016F00004","SMA941228Q63-016F00005","SMA941228Q63-016F00996","SMA941228Q63-016F00997","SMA941228Q63-016F00999","CNA010605Q50-008I00001","CNA010605Q50-008I00002","CNP0306116B7-004EZQ001","CNS621231AA5-014PBJ001","CNV060628PW6-015QCW001","CNZ701205BV4-008IZI001","CNP990419B40-006G3A001","CNE0508253Z4-020VQZ001","CNN050429887-011L9T999","CNS940722SH1-006D00001","CNU800928K31-018E00999","CPT991022DE7-021W3J001","CRAE06112967-012M7A001","CRE9510319D3-045000001","CSA840723HZ7-008D00001","CNC881207TN3-048410001","CNC881207TN3-048410002","CNC881207TN3-048410003","DIC860428M2A-008VSS001","DIC860428M2A-008VSS002","DIC860428M2A-008VSS003","DIC860428M2A-008VSS004","DIC860428M2A-008VSS005","DIC860428M2A-008VSS006","DIC860428M2A-008VSS007","DIC860428M2A-008VSS008","DIC860428M2A-008VSS010","DIC860428M2A-008VSS011","DIC860428M2A-008VSS012","DIC860428M2A-008VSS013","DIC860428M2A-008VSS014","DIC860428M2A-008VSS015","DIC860428M2A-008VSS016","DIC860428M2A-008VSS998","DIC860428M2A-008VSS999","DIC860428M2A-020VSS001","DIC860428M2A-020VSS002","DIC860428M2A-020VSS003","DIC860428M2A-020VSS004","DIC860428M2A-020VSS005","DIC860428M2A-020VSS006","DIC860428M2A-020VSS007","DIC860428M2A-020VSS008","DIC860428M2A-020VSS010","DIC860428M2A-020VSS011","DIC860428M2A-020VSS012","DIC860428M2A-020VSS013","DIC860428M2A-020VSS014","DIC860428M2A-020VSS015","DIC860428M2A-020VSS016","DIC860428M2A-020VSS998","DIC860428M2A-020VSS999","SND7701134L0-012NHK001","SND7701134L0-012NHK002","SND7701134L0-012NHK003","ECA501108P74-048L8P001","CFS941020BZ5-03891E994","CFS941020BZ5-03891E995","CFS941020BZ5-03891E996","CFS941020BZ5-03891E997","CFS941020BZ5-03891E998","CFS941020BZ5-03891E999","EDU8202178I3-048L8G001","ESA810617LA9-010K2N001","ESA810617LA9-010K2N002","FCE940726U22-011MAR001","BNO8707235I5-048L9Y001","FFC720926D70-009J4V001","FFM9002036F0-010K2O001","FFN760629HP1-015QEU001","FGF550624CL9-006HBW001","FGF550624CL9-006HBW007","FRC810401N85-008I6L001","FRC810401N85-008I6L002","FRC810401N85-008I6L003","FRC810401N85-008I6L004","FRC810401N85-008I6L010","FRC810401N85-008I6L011","FRC810401N85-008I6L974","FRC810401N85-008I6L976","FRC810401N85-008I6L977","FRC810401N85-008I6L978","FRC810401N85-008I6L979","FRC810401N85-008I6L981","FRC810401N85-008I6L982","FRC810401N85-008I6L986","FRC810401N85-008I6L987","FRC810401N85-008I6L988","FRC810401N85-008I6L989","FRC810401N85-008I6L990","FRC810401N85-008I6L991","FRC810401N85-008I6L992","FRC810401N85-008I6L993","FRC810401N85-008I6L994","FRC810401N85-008I6L995","FRC810401N85-008I6L999","FRC810801N85-008I6L971","FIT991020R30-009J3L001","FRU021226V91-006HAN001","FRU021226V91-006HAN002","NFI940325BG3-006HAT001","FFM0109058C1-010ZZ1999","FNF740528TQ0-020VZG001","FCO7607212A6-021W3H003","NHB770831BW3-021W3S002","FOP691009FF3-021W3X999","FOP691009FF3-021W3X999","FNF740416I93-021W3N003","FFN850124HYA-015QIQ001","HGD720726831-012NBB001","HGD720726831-012NBB002","HGM9505119F0-012NBD001","HGM9505119F0-012NBD998","HGM9505119F0-012NBD999","HGM9505119FO-012NBD002","HIM871203BS0-012NBG001","HIM871203BS0-012NBG003","HIM871203BS0-012NBG999","HJM050127AD0-012NAW001","HRA061130D7A-012NBQ001","HRA120609DQ4-012NBU999","HRA061129AG3-012NBR001","HRA061129NU0-012NBS001","HRA061129NU0-012NBS999","HRA091214DF2-012NBT999","IEP921123J76-011MAX001","IFD0212243C2-006HHE001","IFD130924CX1-043D00001","IMC8303256B0-048MDC001","IMR830323RH1-011MDL002","IMJ990106AP3-020VUY001","IMP650823397-018T0O002","IMP650823397-018T0O003","IMP650823397-018T0O004","IMP650823397-018T0O005","IMP650823397-018T0O006","IMP931211NE1-010K8V001","IMS421231I42-050GYR036","IMS421231I45-050GYR002","IMS421231I45-050GYR004","IMS421231I45-050GYR005","IMS421231I45-050GYR006","IMS421231I45-050GYR007","IMS421231I45-050GYR008","IMS421231I45-050GYR009","IMS421231I45-050GYR010","IMS421231I45-050GYR011","IMS421231I45-050GYR012","IMS421231I45-050GYR013","IMS421231I45-050GYR014","IMS421231I45-050GYR015","IMS421231I45-050GYR017","IMS421231I45-050GYR018","IMS421231I45-050GYR019","IMS421231I45-050GYR020","IMS421231I45-050GYR022","IMS421231I45-050GYR023","IMS421231I45-050GYR024","IMS421231I45-050GYR025","IMS421231I45-050GYR026","IMS421231I45-050GYR027","IMS421231I45-050GYR028","IMS421231I45-050GYR029","IMS421231I45-050GYR030","IMS421231I45-050GYR031","IMS421231I45-050GYR032","IMS421231I45-050GYR033","IMS421231I45-050GYR035","IMS421231I45-050GYR037","IMS421231I45-050GYR038","IMS421231I45-050GYR039","IMS421231I45-050GYR040","IMS421231I45-050GYR041","IMS421231I45-050GYR042","IMS421231I45-050GYR043","IMS421231I45-050GYR044","IMS421231I45-050GYR045","IMS421231I45-050GYR046","IMS421231I45-050GYR047","IMS421231I45-050GYR049","IMS421231I45-050GYR050","IMS421231I45-050GYR051","IMS421231I45-050GYR052","IMS421231I45-050GYR053","IMS421231I45-050GYR054","IMS421231I45-050GYR055","IMS421231I45-050GYR056","IMS421231I45-050GYR057","IMS421231I45-050GYR058","IMS421231I45-050GYR059","IMS421231I45-050GYR061","IMS421231I45-050GYR062","IMS421231I45-050GYR063","IMS421231I45-050GYR064","IMS421231I45-050GYR066","IMS421231I45-050GYR067","IMS421231I45-050GYR068","IMS421231I45-050GYR070","IMS421231I45-050GYR071","IMS421231I45-050GYR072","IMS421231I45-050GYR073","IMS421231I45-050GYR074","IMS421231I45-050GYR075","IMS421231I45-050GYR076","IMS421231I45-050GYR078","IMS421231I45-050GYR079","IMS421231I45-050GYR080","IMS421231I45-050GYR081","IMS421231I45-050GYR082","IMS421231I45-050GYR083","IMS421231I45-050GYR084","IMS421231I45-050GYR085","IMS421231I45-050GYR086","IMS421231I45-050GYR088","IMS421231I45-050GYR090","IMS421231I45-050GYR091","IMS421231I45-050GYR092","IMS421231I45-050GYR093","IMS421231I45-050GYR094","IMS421231I45-050GYR095","IMS421231I45-050GYR096","IMS421231I45-050GYR097","IMS421231I45-050GYR098","IMS421231I45-050GYR099","IMS421231I45-050GYR101","IMS421231I45-050GYR106","IMS421231I45-050GYR110","IMS421231I45-050GYR112","IMS421231I45-050GYR118","IMS421231I45-050GYR119","IMS421231I45-050GYR120","IMS421231I45-050GYR983","IMS421231I45-050GYR984","IMS421231I45-050GYR987","IMS421231I45-050GYR988","IMS421231I45-050GYR991","IMS421231I45-050GYR992","IMS421231I45-050GYR994","IMS421231I45-050GYR997","IMS421231I45-050GYR998","IMS421231I45-050GYR999","IMS421235I45-050GYR034","IMS451231I45-050GYR003","IMSS421231I4-050GYR001","IMSS421231I4-050GYR016","IMSS421231I4-050GYR048","IMSS421231I4-050GYR060","IMSS421231I4-050GYR069","IMSS421231I4-050GYR107","SCT060601G50-009A00001","IMT011031BB3-016RJE001","IMT011031BB3-016RJE002","INC960412L26-017SKC002","INE130115UL9-010E00998","CGP911204QU3-020L00001","INA460815GV1-048D00001","INA460815GV1-048D00004","INLI0303104X-048MDB002","INA711112IN7-03891U001","INP790822PM7-020V3A999","INP001214934-008RJL001","INB470101FA5-048E00994","INB470101FA5-048E00995","IND800102C16-008I9H999","INC461125HL8-012NBV001","INC430623C16-012NCA001","IND800102C16-008I9H999","INC710101RH7-012NCG001","INC710101RH7-012NCG999","IAA6210025R4-006A00996","IAA6210025R4-006A00997","IND920604A49-020D00001","INE810901CP4-011MDA001","INE810901CP4-011MDA991","INE810901CP4-011MDA992","INE810901CP4-011MDA994","INE810901CP4-011MDA995","INE810901CP4-011MDA996","INE9812011F7-011MDA993","INE120606AM5-016RJJ001","IEC7508071B2-03891Q001","IEC7508071B2-03891Q002","IEC7508071B2-03891Q999","INE020807FG6-006A2O001","IIE751125JEA-018T0K001","IIE751125JEA-018T0K002","IIE751125JEA-018T0K003","INE0804164Z7-040100982","INE0804164Z7-040100983","INE0804164Z7-040100984","INE0804164Z7-040100985","INE0804164Z7-040100986","INE0804164Z7-040100987","INE0804164Z7-040100988","INE0804164Z7-040100989","INE0804164Z7-040100991","INE0804164Z7-040100992","INE0804164Z7-040100993","INE0804164Z7-040100994","INE0804164Z7-040100995","INE0804164Z7-040100996","INE0804164Z7-040100997","INE0804164Z7-040100998","INE8501019P7-012NCD001","INE8501019P7-012NCD002","IFN060425C53-014P7R001","FID741230A22-03891M001","ING120531AC5-012NCE999","INI960412HUA-008JAG001","INI960412HUA-008JAG002","INI960412HUA-008JAG003","INI960412HUA-008JAG004","INI960412HUA-008JAG005","INI960412HUA-008JAG006","INI960412HUA-008JAG007","INI960412HUA-008JAG008","INI960412HUA-008JAG009","INI960412HUA-008JAG010","INI960412HUA-008JAG011","INI960412HUA-008JAG012","INI960412HUA-008JAG013","INI960412HUA-008JAG014","INI080202BQ8-011MDE001","INI080202BQ8-011MDE998","INI7901272S2-018T0Q001","INI7901272S2-018T0Q002","INI7901272S2-018T0Q003","INM931019BR7-004K00001","SGO8501012H2-004K00001","INM0407193Q5-012NCH001","INM0101121P2-006HHG001","INN900727UE1-012NCK001","INN900727UE1-012NCK002","INN900727UE1-012NCK003","INP8304203F7-012NCZ001","INP8304203F7-012NCZ002","INP8304194R2-012NDE001","INP8304203F7-012NCZ001","INP8304203F7-012NCZ002","CDN481110H94-047AYB002","CDN481110H94-047AYB012","CND481110H94-047AYB001","CND481110H94-047AYB003","CND481110H94-047AYB004","CND481110H94-047AYB005","CND481110H94-047AYB006","CND481110H94-047AYB007","CND481110H94-047AYB009","CND481110H94-047AYB010","CND481110H94-047AYB011","CND481110H94-047AYB013","CND481110H94-047AYB015","CND481110H94-047AYB016","CND481110H94-047AYB018","CND481110H94-047AYB019","CND481110H94-047AYB020","CND481110H94-047AYB021","CND481110H94-047AYB997","CND481110H94-047AYB998","INP791226QKA-012M7F001","INP791226QKA-012M7F002","INR0506235L1-012NDF001","INR0506235L1-012NDF999","INS8701264P2-012NDY001","INS8701264P2-012NDY002","INS8701264P2-012NDY003","CRT741111GT5-015QDV001","IPA9901206D2-006HHN001","IPI001124PX5-03891W001","IPN811229H26-011B00001","IPN811229H26-011B00999","ISS7607295W9-007HXA001","ISS7607295W9-007HXA999","CEF721226EH7-051GYN905","ISS6001015A3-051GYN001","ISS6001015A3-051GYN002","ISS6001015A3-051GYN003","ISS6001015A3-051GYN004","ISS6001015A3-051GYN005","ISS6001015A3-051GYN006","ISS6001015A3-051GYN007","ISS6001015A3-051GYN008","ISS6001015A3-051GYN009","ISS6001015A3-051GYN010","ISS6001015A3-051GYN011","ISS6001015A3-051GYN012","ISS6001015A3-051GYN013","ISS6001015A3-051GYN014","ISS6001015A3-051GYN015","ISS6001015A3-051GYN016","ISS6001015A3-051GYN017","ISS6001015A3-051GYN018","ISS6001015A3-051GYN019","ISS6001015A3-051GYN020","ISS6001015A3-051GYN021","ISS6001015A3-051GYN022","ISS6001015A3-051GYN023","ISS6001015A3-051GYN024","ISS6001015A3-051GYN025","ISS6001015A3-051GYN027","ISS6001015A3-051GYN028","ISS6001015A3-051GYN029","ISS6001015A3-051GYN030","ISS6001015A3-051GYN031","ISS6001015A3-051GYN032","ISS6001015A3-051GYN033","ISS6001015A3-051GYN035","ISS6001015A3-051GYN036","ISS6001015A3-051GYN037","ISS6001015A3-051GYN039","ISS6001015A3-051GYN040","ISS6001015A3-051GYN041","ISS6001015A3-051GYN042","ISS6001015A3-051GYN043","ISS6001015A3-051GYN045","ISS6001015A3-051GYN046","ISS6001015A3-051GYN047","ISS6001015A3-051GYN048","ISS6001015A3-051GYN051","ISS6001015A3-051GYN052","ISS6001015A3-051GYN053","ISS6001015A3-051GYN054","ISS6001015A3-051GYN055","ISS6001015A3-051GYN056","ISS6001015A3-051GYN057","ISS6001015A3-051GYN058","ISS6001015A3-051GYN059","ISS6001015A3-051GYN060","ISS6001015A3-051GYN061","ISS6001015A3-051GYN063","ISS6001015A3-051GYN065","ISS6001015A3-051GYN068","ISS6001015A3-051GYN070","ISS6001015A3-051GYN072","ISS6001015A3-051GYN073","ISS6001015A3-051GYN074","ISS6001015A3-051GYN075","ISS6001015A3-051GYN077","ISS6001015A3-051GYN078","ISS6001015A3-051GYN079","ISS6001015A3-051GYN081","ISS6001015A3-051GYN082","ISS6001015A3-051GYN083","ISS6001015A3-051GYN085","ISS6001015A3-051GYN086","ISS6001015A3-051GYN089","ISS6001015A3-051GYN880","ISS6001015A3-051GYN882","ISS6001015A3-051GYN883","ISS6001015A3-051GYN893","ISS6001015A3-051GYN895","ISS6001015A3-051GYN901","ISS6001015A3-051GYN999","SUP090821742-051GYN885","LIC950821M84-020VST001","LIC950821M84-020VST002","LIC950821M84-020VST003","LIC950821M84-020VST004","LIC950821M84-020VST005","LIC950821M84-020VST006","LIC950821M84-020VST007","LIC950821M84-020VST008","LIC950821M84-020VST009","LIC950821M84-020VST010","LIC950821M84-020VST011","LIC950821M84-020VST012","LIC950821M84-020VST013","LIC950821M84-020VST014","LIC950821M84-020VST015","LIC950821M84-020VST016","LIC950821M84-020VST017","LIC950821M84-020VST018","LIC950821M84-020VST019","LIC950821M84-020VST020","LIC950821M84-020VST021","LIC950821M84-020VST022","LIC950821M84-020VST023","LIC950821M84-020VST027","LIC950821M84-020VST029","LIC950821M84-020VST991","LIC950821M84-020VST992","LIC950821M84-020VST994","LIC950821M84-020VST995","LIC950821M84-020VST996","LIC950821M84-020VST998","LIC950824M84-020VST024","LNA200807U2A-006HHQ001","IIJ8111184L7-03891S999","ENA950601KB9-006HIU999","FFS0106041P5-006HIU995","NFF030630458-006HIU002","NFI3406305T0-006HIU001","NFI3406305T0-006HIU996","NFI3406305T0-006HIU998","NFS030505AM4-006HIU994","NAN060602PW9-006AYG001","IPN811229H26-011B01001","PAG9202262R8-015QEZ001","PAG9202262R8-015QEZ966","PAG9202262R8-015QEZ967","PAG9202262R8-015QEZ968","PAG9202262R8-015QEZ969","PAG9202262R8-015QEZ970","PAG9202262R8-015QEZ971","PAG9202262R8-015QEZ972","PAG9202262R8-015QEZ973","PAG9202262R8-015QEZ975","PAG9202262R8-015QEZ976","PAG9202262R8-015QEZ977","PAG9202262R8-015QEZ978","PAG9202262R8-015QEZ979","PAG9202262R8-015QEZ980","PAG9202262R8-015QEZ981","PAG9202262R8-015QEZ982","PAG9202262R8-015QEZ983","PAG9202262R8-015QEZ984","PAG9202262R8-015QEZ985","PAG9202262R8-015QEZ986","PAG9202262R8-015QEZ987","PAG9202262R8-015QEZ988","PAG9202262R8-015QEZ989","PAG9202262R8-015QEZ990","PAG9202262R8-015QEZ991","PAG9202262R8-015QEZ993","PAG9202262R8-015QEZ994","PAG9202262R8-015QEZ995","PAG9202262R8-015QEZ996","PAG9202262R8-015QEZ997","PAG9202262R8-015QEZ998","PAG9202262R8-015QEZ999","SGO130103UJ4-004L00001","PGR850101RC6-017000003","PGR850101RC6-017000004","PGR850101RC6-017000005","PGR850101RC6-017000006","PGR850101RC6-017000007","PGR850101RC6-017000008","PGR850101RC6-017000009","PGR850101RC6-017000010","PGR850101RC6-017000011","PGR850101RC6-017000012","PGR850101RC6-017000013","PGR850101RC6-017000015","PGR850101RC6-017000016","PGR850101RC6-017000017","PGR850101RC6-017000018","PGR850101RC6-017000020","PGR850101RC6-017000022","PGR850101RC6-017000024","PGR850101RC6-017000027","PGR850101RC6-017000029","PGR850101RC6-017000032","PGR850101RC6-017000033","PGR850101RC6-017000976","PGR850101RC6-017000987","PGR850101RC6-017000988","PGR850101RC6-017000989","PGR850101RC6-017000990","PGR850101RC6-017000998","PGR850101RC6-017000999","POI670302RX4-011MGC998","POI670302RX4-011MGC999","PRE850101UY3-002000997","PRE850101UY3-002000998","PRE850101UY3-002000999","PDC0609046M7-006AYI999","PFC7512226Y3-010LAT001","PFD750602I25-014A00001","PFP920718FB2-016E00001","PFP920718FB2-016E00973","PFP920718FB2-016E00974","PFP920718FB2-016E00975","PFP920718FB2-016E00980","PFP920718FB2-016E00981","PFP920718FB2-016E00985","PFP920718FB2-016E00989","PFP920718FB2-016E00991","PFP920718FB2-016E00993","PFP920718FB2-016E00994","PFP920718FB2-016E00996","PRO0707099D2-010K2W999","OPI160314HH2-009J4Q999","PNB731214RF0-008JBK001","PAP8408163V2-006HJY001","CNP140906H36-020G00001","CNP140906H36-020G00002","CNP140906H36-020G00003","CNP140906H36-020G00004","CNP140906H36-020G00005","CNP140906H36-020G00010","CNP140906H36-020G00011","CNP140906H36-020G00012","CNP140906H36-020G00966","CNP140906H36-020G00968","CNP140906H36-020G00969","CNP140906H36-020G00970","CNP140906H36-020G00971","CNP140906H36-020G00972","CNP140906H36-020G00974","CNP140906H36-020G00975","CNP140906H36-020G00976","CNP140906H36-020G00977","CNP140906H36-020G00978","CNP140906H36-020G00979","CNP140906H36-020G00981","CNP140906H36-020G00989","CNP140906H36-020G00990","CNP140906H36-020G00991","CNP140906H36-020G00992","CNP140906H36-020G00993","CNP140906H36-020G00995","CNP140906H36-020G00996","CNP140906H36-020G00997","CNP140906H36-020G00999","SCN9708081VA-020G00973","SCN9708081VA-020G00994","SGO1301036U0-004D00001","RAN920810MU6-015B00001","RAN920810MU6-015B00966","RAN920810MU6-015B00967","RAN920810MU6-015B00968","RAN920810MU6-015B00969","RAN920810MU6-015B00970","RAN920810MU6-015B00971","RAN920810MU6-015B00972","RAN920810MU6-015B00973","RAN920810MU6-015B00974","RAN920810MU6-015B00975","RAN920810MU6-015B00976","RAN920810MU6-015B00977","RAN920810MU6-015B00980","RAN920810MU6-015B00981","RAN920810MU6-015B00982","RAN920810MU6-015B00983","RAN920810MU6-015B00984","RAN920810MU6-015B00985","RAN920810MU6-015B00987","RAN920810MU6-015B00988","RAN920810MU6-015B00989","RAN920810MU6-015B00990","RAN920810MU6-015B00992","RAN920810MU6-015B00993","RAN920810MU6-015B00994","RAN920810MU6-015B00995","RAN920810MU6-015B00996","RAN920810MU6-015B00997","RAN920810MU6-015B00998","RAN920810MU6-015B00999","SAC980601SA2-009KDK001","SAG001130BX4-008000964","SAG001130EE2-008000980","SAG001130HA1-008000990","SAG001130MQ7-008000994","SAG001130PH4-008000978","SAG001130SV9-008000981","SAG0012019Z0-008000967","SAG0107102L8-008000979","SAG010710U82-008000998","SAG010710V98-008000995","SAG010711M59-008000993","SAG0209233BA-008000985","SAG0511037Q4-008000968","SAG051103GR8-008000966","SAG051104AW1-008000983","SAG051104J82-008000961","SAG051104M5A-008000992","SAG060303SI9-008000982","SAG0604251Y2-008000965","SAG0604257F2-008000987","SAG0604257S7-008000996","SAG0604258D3-008000997","SAG060425AD8-008000959","SAG060425C81-008000963","SAG060425FE2-008000989","SAG060425GR4-008000976","SAG060425MGA-008000962","SAG060425NI3-008000986","SAG060425S42-008000960","SAG060630H99-008000984","SAG941228M54-008000969","SAG941228M54-008000988","SAG941228M54-008000999","SAG941228RI4-008000991","SAE030617SV8-006HKA001","SAG001130BX4-008000964","SAG001130EE2-008000980","SAG001130HA1-008000990","SAG001130MQ7-008000994","SAG001130PH4-008000978","SAG001130SV9-008000981","SAG0012019Z0-008000967","SAG0107102L8-008000979","SAG010710U82-008000998","SAG010710V98-008000995","SAG010711M59-008000993","SAG0209233BA-008000985","SAG0511037Q4-008000968","SAG051103GR8-008000966","SAG051104AW1-008000983","SAG051104J82-008000961","SAG051104M5A-008000992","SAG060303SI9-008000982","SAG0604251Y2-008000965","SAG0604257F2-008000987","SAG0604257S7-008000996","SAG0604258D3-008000997","SAG060425AD8-008000959","SAG060425C81-008000963","SAG060425FE2-008000989","SAG060425GR4-008000976","SAG060425MGA-008000962","SAG060425NI3-008000986","SAG060425S42-008000960","SAG060630H99-008000984","SAG941228M54-008000969","SAG941228M54-008000988","SAG941228M54-008000999","SAG941228RI4-008000991","SSA630502CU1-012N00001","SAT970701NN3-006E00001","SAT970701NN3-006E00002","SAT970701NN3-006E00003","SAT970701NN3-006E00005","SAT970701NN3-006E00006","SAT970701NN3-006E00007","SAT970701NN3-006E00009","SAT970701NN3-006E00011","SAT970701NN3-006E00012","SAT970701NN3-006E00014","SAT970701NN3-006E00017","SAT970701NN3-006E00019","SAT970701NN3-006E00020","SAT970701NN3-006E00021","SAT970701NN3-006E00023","SAT970701NN3-006E00025","SAT970701NN3-006E00026","SAT970701NN3-006E00027","SAT970701NN3-006E00029","SAT970701NN3-006E00030","SAT970701NN3-006E00032","SAT970701NN3-006E00033","SAT970701NN3-006E00034","SAT970701NN3-006E00035","SAT970701NN3-006E00036","SAT970701NN3-006E00037","SAT970701NN3-006E00038","SAT970701NN3-006E00042","SAT970701NN3-006E00045","SAT970701NN3-006E00056","SAT970701NN3-006E00060","SAT970701NN3-006E00997","SAT970701NN3-006E00998","SAT970701UU3-006E00024","CSC850101KR7-009000998","CSG830527VC9-009000904","CSG830527VC9-009000955","SCT051121313-009000896","SCT051121380-009000959","SCT0511219T4-009000895","SCT051121AF9-009000986","SCT051121AUA-009000893","SCT051121BDA-009000999","SCT051121CRA-009000069","SCT051121FSA-009000901","SCT051121GMA-009000062","SCT051121HN5-009000072","SCT051121I39-009000940","SCT051121IB4-009000954","SCT051121IB4-009000967","SCT051121IB4-009000972","SCT051121IB4-009000993","SCT051121M62-009000941","SCT051121MJ0-009000988","SCT051121NN0-009000937","SCT051121NU4-009000946","SCT051121PH1-009000969","SCT051121PH1-009000990","SCT051121QK3-009000989","SCT051121SA6-009000060","SCT051121SI2-009000987","SCT051121SM4-009000994","SCT051121SM4-009000995","SCT051121T95-009000897","SCT060228EZ8-009000980","SCT0603018RA-009000976","SCT0603061P2-009000965","SCT0603061P2-009000997","SCT0603061Z4-009000059","SCT0603061Z4-009000948","SCT060306495-009000945","SCT060306495-009000963","SCT060306AX3-009000961","SCT060306D74-009000936","SCT060306D74-009000950","SCT060306DT2-009000957","SCT060306DT2-009000996","SCT060306F95-009000984","SCT060306F95-009000991","SCT060306NWA-009000968","SCT060306NWA-009000979","SCT060306Q68-009000938","SCT060306Q68-009000956","SCT060306R22-009000970","SCT060306R22-009000992","SCT060306RL8-009000049","SCT060306RL8-009000981","SCT060306RM6-009000047","SCT060306RM6-009000962","SCT060306SX1-009000973","SCT8305124Y3-009000978","SCT830526912-009000974","SCT830526912-009000977","SCT8305269N2-009000012","SCT830526E6A-009000966","SCT830526FW7-009000018","SCT830526JW7-009000971","SCT850101181-009000947","SCT850101181-009000985","SCT850101321-009000960","SCT850101321-009000983","SCT8501015I7-009000052","SCT8501015I7-009000951","SCT850101LS3-009000975","SCT850101QZ4-009000964","SCT850101SZ9-009000024","SCT850101SZ9-009000949","UTI0901089S4-009000982","SCV080418DPA-006GSC001","FFM0109058C1-010102996","SEC8301019V9-010000999","STU750101H22-021000999","SRA750101RB7-015000999","SRA980427DJ8-015000996","SDN8501014D2-007000995","SDN8501014D2-007000997","SDN8501014D2-007000998","SDN8501014D2-007000999","SDS040719E51-020000884","SDS0602093X6-020000881","SDS0602094P8-020000008","SDS0602097FA-020000023","SDS0602098F7-020000005","SDS0602098Q5-020000020","SDS060209928-020000027","SDS060209979-020000004","SDS060209BW6-020000014","SDS060209D94-020000012","SDS060209NL5-020000010","SDS9205222D2-020000028","SDS9205226F8-020000877","SDS920522F6A-020000018","SDS920522L71-020000017","SDS920522L71-020000999","SDS920522NE3-020000878","SDS920522TI7-020000002","SDS920525612-020000870","SDS920525FT5-020000003","SDS920526IM8-020000871","SGO8501012H2-004000998","SGO8501012H2-004000999","SMA850101TQ4-013000998","SMA850101TQ4-013000999","SMA941228156-016000967","SMA941228295-016000988","SMA941228636-016000992","SMA9412286A3-016000989","SMA941228B75-016000983","SMA941228GS1-016000968","SMA941228GU8-016000997","SMA941228IV0-016000987","SMA941228JI3-016000985","SMA941228KI0-016000984","SMA941228KT9-016000965","SMA941228LA2-016000978","SMA941228PA9-016000990","SMA941228QC2-016000981","SMA941228RJ7-016000973","SMA941228S92-016000986","SMA941228SW9-016000980","SNS960412AH4-008B00001","SSN051121A17-009C00001","SEN9412287J6-018000999","CEC9310149N6-011000997","SEP210905778-011000973","SEP210905778-011000993","SEP210905778-011000999","SPM860820CF5-009J9E001","SES170530A9A-047AYM999","SGO8501012H2-004W00001","SFP941229IMA-027000002","SGM7602222H2-010LAU001","SHC850101U37-006000003","SHC850101U37-006000997","SHC850101U37-006000998","SHC850101U37-006000999","SHCP850101U3-006000998","HFE011011HH1-006HKI002","SIA960412EW2-008G00001","SNI960412CP2-008C00999","SPF130103BF7-004O00001","OPM100331UG5-006AYL998","SRE850101BT4-005000998","SRE850101BT4-005000999","SSA630502CU1-012000971","SSA630502CU1-012000990","SSA630502CU1-012000991","SSA630502CU1-012000999","SPT401231P53-014000994","STP401231P53-014000963","STP401231P53-014000964","STP401231P53-014000965","STP401231P53-014000966","STP401231P53-014000967","STP401231P53-014000968","STP401231P53-014000969","STP401231P53-014000970","STP401231P53-014000971","STP401231P53-014000972","STP401231P53-014000973","STP401231P53-014000974","STP401231P53-014000975","STP401231P53-014000976","STP401231P53-014000977","STP401231P53-014000978","STP401231P53-014000979","STP401231P53-014000980","STP401231P53-014000981","STP401231P53-014000982","STP401231P53-014000983","STP401231P53-014000984","STP401231P53-014000985","STP401231P53-014000986","STP401231P53-014000987","STP401231P53-014000989","STP401231P53-014000990","STP401231P53-014000991","STP401231P53-014000992","STP401231P53-014000993","STP401231P53-014000995","STP401231P53-014000998","STP401231P53-014000999","SEP210905778-011M00994","TME891117F56-009KCZ001","TME891117F56-009KCZ002","TME891117F56-009KCZ003","TME891117F56-009KCZ004","TME891117F56-009KCZ005","TME891117F56-009KCZ006","TME891117F56-009KCZ007","TME891117F56-009KCZ009","TME891117F56-009KCZ011","TME891117F56-009KCZ013","TME891117F56-009KCZ014","TME891117F56-009KCZ016","TME891117F56-009KCZ017","TME891117F56-009KCZ018","TME891117F56-009KCZ019","TME891117F56-009KCZ022","TME891117F56-009KCZ988","TME891117F56-009KCZ991","TME891117F56-009KCZ992","TME891117F56-009KCZ994","TME891117F56-009KCZ995","TME891117F56-009KCZ996","TME891117F56-009KCZ997","TME891117F56-009KCZ998","TME891117F56-009KCZ999","TFJ360831MTA-032000001","TGM990109718-004E2D001","TME901116GZ8-048MHL001","TSA920227QH7-031000001","UPN780829QW1-011A00001","AFD1606304J2-006G00999"],"unique_tenderers":[229,36,132,160,382,187,24,118,274,154,155,104,75,71,37,199,56,210,340,355,178,114,34,221,60,58,12,98,27,74,20,49,4,109,51,112,64,317,403,44,32,116,514,157,59,96,63,158,48,54,67,49,71,110,55,54,9,15,68,22,14,4,21,18,22,36,23,21,11,3,68,13,11,13,22,11,28,6,10,20,8,13,18,11,10,16,16,39,8,8,100,5,22,30,23,5,14,5,6,19,18,17,3,14,14,13,25,36,174,333,78,11,35,33,26,57,20,33,40,439,324,276,154,433,92,11,298,1,1,5,1,1,5,2,13,2,9,1,7,3,6,5,92,1,2,3,7,450,285,270,147,122,166,118,99,68,114,50,72,40,49,60,82,65,79,84,62,127,65,45,78,82,334,15,39,238,222,126,50,5,6,126,83,42,36,49,15,14,6,5,85,41,17,236,14,15,66,518,43,15,13,25,49,37,27,32,52,65,266,340,720,2,94,14,84,105,221,9,3,216,8,32,1,2,67,6,1,52,2,30,7,3,21,148,9,19,53,7,5,2,78,6,3,173,15,17,8,16,19,48,4,1,18,33,48,38,24,1,6,15,61,10,42,10,17,28,27,74,503,428,3201,4,4,8,4,22,31,1,1,1,16,11,1,5,85,16,2,1,2,1,1,1,13,11,6,2,1,3,6,1,1,3,4,2,1,5,29,15,7,1,46,2,781,910,457,2,1344,3,4,1762,427,19,185,165,147,145,334,66,233,276,306,90,363,295,228,51,106,74,222,54,67,331,171,935,242,149,271,733,205,449,474,63,550,7,493,290,85,24,166,216,50,251,147,549,120,5,297,308,297,1288,73,132,551,210,521,26,16,41,3,145,12,45,9,24,9,2,31,26,3,13,1,7,12,16,24,22,20,17,6,10,4,6,4,38,9,2,8,24,20,1855,41,14,31,40,202,114,176,76,22,2,1,5,9,465,6,12,34,202,87,212,171,57,506,71,122,60,56,39,59,66,61,43,64,78,213,49,34,15,33,39,19,59,21,30,217,135,75,80,60,21,3,27,20,54,57,169,36,55,32,137,58,113,52,29,34,199,85,84,102,24,108,42,333,54,501,75,31,13,26,107,60,18,14,9,37,33,4,100,212,320,63,108,177,207,224,134,356,101,163,264,154,82,104,196,3463,79,12,27,10,76,62,13,2,14,82,12,46,3,66,112,279,39,136,137,49,27,168,108,44,80,60,126,33,84,30,119,137,372,88,234,31,83,323,51,16,89,48,20,42,115,498,30,392,386,194,174,95,390,45,60,7,4,5,10,2,3,2,1,3,1,1,2,13,2,1,2,1,3,4,2,4,1,4,2,126,295,15,101,65,385,31,645,158,34,268,85,183,225,525,41,31,1,215,210,5,494,433,118,219,174,9,392,50,438,328,516,380,215,77,41,551,135,13,384,401,907,469,665,522,774,534,806,647,594,524,400,877,367,799,367,726,335,530,633,753,922,296,709,480,232,318,1051,463,643,441,378,64,338,134,68,55,307,30,432,539,296,357,420,400,26,17,33,340,3,254,263,57,16,29,264,1,34,390,74,46,132,16,62,386,371,13,2,277,18,60,128,4,86,157,19,33,57,310,102,56,31,53,14,11,33,54,39,9,71,5,32,68,167,77,22,25,2,14,3,126,59,182,83,563,581,451,916,158,410,406,30,206,322,255,533,43,97,1928,95,107,331,157,618,40,2647,240,479,567,95,378,19,211,236,112,344,24,45,1,11,2,44,199,225,103,21,152,512,18,1,3,1,1,72,70,63,10,20,28,333,15,82,2,40,64,1,529,229,477,175,77,74,98,64,90,37,7,69,72,92,44,43,23,24,48,1424,276,150,89,36,63,353,220,282,154,131,2,137,21,392,390,140,12,16,52,34,72,8,3,12,1,4,29,5,6,13,6,3,37,8,9,3,157,235,17,178,597,124,26,157,115,519,495,22,371,31,382,94,160,83,283,193,59,50,138,74,122,81,256,172,80,127,183,142,41,50,58,83,108,154,141,131,104,85,154,133,142,251,124,202,68,14,180,27,269,113,113,25,41,91,140,205,110,16,77,126,121,164,2,5,147,87,88,211,10,120,13,185,73,53,82,86,83,55,29,14,206,43,25,71,68,23,161,209,168,144,21,327,236,282,36,58,68,79,151,88,186,19,28,60,40,24,8,13,11,17,2,20,7,11,6,24,7,24,4,2,6,3,1,456,324,1,42,2022,428,14,130,18,192,950,313,7,2,4,12,7,2,7,7,6,6,3,6,5,3,15,11,4,7,2,4,4,9,3,2,2,6,4,1,1,2,4,21,230,26,19,31,30,20,10,12,25,6,18,11,32,7,3,6,16,31,26,6,14,11,54,10,15,25,17,13,10,458,22,91,68,175,234,240,411,82,105,2,2,2,4,2,4,3,10,4,2,3,221,132,166,374,188,35,43,24,51,50,48,9,14,54,18,19,29,18,19,20,84,28,30,18,20,15,43,11,24,18,16,42,13,15,18,22,46,63,3,2,2,5,6,8,5,3,4,4,11,2,3,3,3,5,7,5,3,5,4,1,5,6,6,7,5,4,11,2,11,5,66,3,32,9,30,29,92,2,16,52,46,14,15,35,11,58,8,5,29,35,40,3,3,15,100,31,80,10,9,24,28,118,25,597,135,85,78,48,43,96,58,165,29,120,120,89,140,67,64,114,110,102,22,42,114,59,70,57,116,155,60,135,46,50,72,97,266,56,184,147,292,34,35,67,38,26,48,16,27,49,39,29,46,59,31,39,28,33,34,31,39,32,34,57,37,21,62,53,25,16,45,15,45,177,27,83,1,411,13,49,3,343,149,13,83,6,55,85,468,244,89,2,33,22,1,33,96,90,47,138,121,44,3,101,100,34,137,68,70,38,145,155,1,196,57,43,122,62,74,503,300,44,241,106,52,52,32,38,184,51,45,368,82,191,62,53,97,315,88,45,60,103,166,223,368,98,11,9,6,584,212,2480,2,114,548,370,1680,2,9,6,9,14,26,10,20,19,1,14,14,2,4,5,395,2,5,1,16,1,343,34,20,1392,8,26,9,1,2,8,538,39,1,2,9,3,7,2,37,1,20,546,348,132,1,26,18,724,340,43,229,1636,585,35,24,386,27,150,139,62,97,139,293,14,462,2,148,941,4,7,1,5,5,9,15,12,6,3,3,11,11,5,3,8,11,9,5,8,4,8,2,5,12,3,10,7,9,13,6,4,10,8,258,5,6,166,9,13,11,14,18,23,10,3,5,6,2,4,4,8,3,5,5,7,8,26,6,6,9,388,220,398,181,110,169],"unique_winners":[205,35,85,123,234,108,12,86,256,37,124,95,14,51,15,184,46,62,298,321,58,94,17,186,49,42,7,80,16,72,11,33,2,101,17,82,33,269,395,20,29,40,334,59,25,40,24,37,27,29,27,22,24,35,16,27,9,12,35,20,11,2,15,8,19,16,6,11,8,2,49,13,10,11,20,11,27,6,10,14,8,13,17,10,7,16,16,14,6,8,30,5,19,26,22,5,9,5,6,17,18,13,3,13,12,13,23,20,109,314,78,11,35,33,26,57,20,33,40,381,134,276,154,345,41,3,220,1,1,5,1,1,5,2,9,2,9,1,5,3,6,5,43,1,2,3,7,388,176,128,41,59,40,30,14,28,69,19,48,33,15,45,37,53,25,50,35,67,19,33,14,56,322,15,39,204,222,76,26,5,6,66,83,41,36,38,6,14,6,5,85,22,16,113,11,15,54,503,18,13,11,14,18,16,16,11,30,25,117,205,433,2,81,5,80,66,180,9,2,148,3,10,1,2,58,3,1,25,1,10,3,2,13,90,1,9,42,4,5,2,43,4,1,96,4,5,5,8,11,44,3,1,6,12,36,17,14,1,1,10,17,3,33,8,6,11,10,41,268,289,1978,4,4,4,4,22,12,1,1,1,16,1,1,5,85,4,1,1,2,1,1,1,8,5,6,1,1,1,5,1,1,1,2,2,1,3,13,10,7,1,15,1,423,558,262,2,851,1,4,988,405,19,132,107,92,141,324,66,223,236,189,23,303,260,171,51,89,72,216,41,58,259,155,826,145,129,242,645,157,428,289,37,538,7,367,274,38,23,121,132,43,133,68,333,88,1,182,276,287,1246,67,82,296,112,498,26,16,38,2,119,12,17,9,20,9,2,31,26,3,8,1,5,11,15,23,21,20,14,4,10,4,6,4,34,9,2,8,23,17,1547,23,13,16,6,102,76,171,25,22,2,1,4,7,102,5,5,21,95,58,129,96,41,176,47,30,53,29,12,43,24,47,14,35,52,81,22,33,4,26,6,19,43,16,30,167,95,16,41,13,13,3,14,13,10,40,97,24,13,22,49,36,29,47,6,28,54,52,25,77,22,34,26,198,13,403,75,31,13,26,76,31,17,8,8,33,25,2,68,179,296,25,89,170,167,156,96,303,73,115,209,78,47,62,81,3463,45,5,19,8,50,41,11,2,8,65,9,30,3,66,59,279,31,82,116,41,22,120,83,32,72,27,113,31,66,20,111,82,372,72,160,11,68,298,41,14,89,30,20,27,115,423,22,311,361,156,141,90,161,13,31,4,1,5,4,2,3,2,1,1,1,1,2,3,2,1,2,1,3,4,1,4,1,4,2,79,209,7,67,64,385,31,626,158,31,194,58,108,130,428,27,25,1,150,197,5,446,324,92,194,133,3,368,15,139,156,501,365,164,60,36,391,64,3,201,224,592,375,467,291,499,360,599,431,396,355,307,592,245,526,270,483,230,330,417,445,584,204,365,288,161,212,786,312,469,329,255,31,202,47,68,47,243,15,310,343,196,274,282,261,22,14,12,218,3,172,209,42,14,22,157,1,20,276,51,23,89,8,21,262,232,7,2,209,10,15,93,4,30,141,16,33,40,217,66,27,14,43,12,10,23,10,16,9,68,1,26,61,93,65,22,21,2,9,2,92,21,118,40,363,400,351,680,121,308,257,16,163,229,152,483,31,64,1874,47,106,295,120,603,18,2564,231,358,506,94,365,7,163,236,106,309,24,45,1,11,2,44,172,214,89,21,55,470,5,1,2,1,1,27,37,34,4,8,16,160,7,51,1,17,30,1,396,134,422,132,57,74,88,64,89,37,7,59,72,87,44,40,21,24,48,1377,218,147,61,36,38,267,207,193,151,99,2,137,17,359,343,124,12,16,33,34,68,6,3,12,1,2,29,5,6,13,6,3,37,6,3,3,139,218,6,164,576,119,24,145,82,299,309,22,217,31,365,93,129,72,268,137,31,43,91,35,81,79,229,93,72,68,169,105,27,35,28,43,95,132,109,102,104,60,134,132,125,205,114,118,60,4,150,12,211,86,90,22,22,91,123,193,94,14,59,108,75,129,2,4,108,84,53,204,7,117,7,164,67,53,48,75,80,39,28,6,171,25,23,69,66,5,123,156,149,76,19,248,116,177,36,55,53,74,117,79,122,7,28,59,32,19,8,7,9,16,1,19,5,4,3,17,4,16,2,2,5,2,1,387,266,1,42,1991,197,5,80,7,116,914,291,7,2,4,12,5,2,7,7,6,6,3,4,5,3,15,8,4,7,2,4,4,9,3,2,2,6,4,1,1,2,4,9,192,17,16,22,20,7,10,7,18,1,12,7,13,4,1,6,10,20,23,6,7,4,32,10,13,11,14,6,10,303,22,41,48,113,97,152,258,66,96,2,2,2,4,2,4,3,9,3,2,3,94,105,148,286,132,25,30,19,36,33,40,8,7,39,18,17,17,13,18,15,30,16,28,17,13,8,32,10,24,16,13,31,12,14,18,15,43,59,3,2,2,5,6,8,4,3,4,4,11,2,3,3,3,5,7,5,3,5,4,1,5,6,6,7,5,4,6,2,11,5,66,3,32,9,28,29,88,2,11,51,43,14,15,35,11,58,8,2,27,27,39,2,3,15,99,29,78,9,9,24,23,84,25,453,130,84,78,44,43,89,53,152,24,112,117,70,135,62,64,114,107,95,7,37,95,55,62,54,115,150,49,131,45,47,72,86,215,47,150,71,124,26,28,38,35,16,39,13,7,29,32,22,35,41,24,32,18,25,27,23,28,29,26,35,27,16,37,43,19,15,24,14,25,147,14,78,1,410,6,15,3,342,149,8,81,6,46,85,422,29,45,1,33,16,1,19,80,84,46,77,92,18,3,83,77,26,125,40,61,32,144,130,1,70,51,40,111,41,41,112,298,26,215,63,37,44,32,23,59,34,28,119,68,118,61,16,96,243,86,35,20,99,125,198,118,32,11,9,6,359,136,2464,2,114,303,243,1026,2,9,6,8,14,14,10,14,19,1,12,13,2,2,5,325,1,5,1,6,1,247,18,20,1220,8,7,4,1,2,8,299,30,1,2,9,3,7,1,6,1,17,327,301,107,1,6,9,474,230,28,219,1544,513,30,11,272,14,93,126,46,90,82,259,6,195,2,91,866,4,7,1,5,5,9,15,12,6,3,3,11,11,5,3,8,11,9,5,8,4,8,2,5,12,3,10,7,9,13,6,4,10,8,172,3,3,116,4,8,11,13,18,16,10,3,5,6,2,4,3,8,3,5,5,7,6,19,2,6,5,268,215,349,102,84,138]},"selected":{"id":"1161","type":"Selection"},"selection_policy":{"id":"1184","type":"UnionRenderers"}},"id":"1160","type":"ColumnDataSource"},{"attributes":{},"id":"1149","type":"WheelZoomTool"},{"attributes":{"source":{"id":"1160","type":"ColumnDataSource"}},"id":"1169","type":"CDSView"},{"attributes":{"data_source":{"id":"1160","type":"ColumnDataSource"},"glyph":{"id":"1163","type":"Scatter"},"hover_glyph":{"id":"1166","type":"Scatter"},"muted_glyph":{"id":"1167","type":"Scatter"},"nonselection_glyph":{"id":"1164","type":"Scatter"},"selection_glyph":{"id":"1165","type":"Scatter"},"view":{"id":"1169","type":"CDSView"}},"id":"1168","type":"GlyphRenderer"},{"attributes":{"bar_line_color":{"value":"black"},"color_mapper":{"id":"1159","type":"LogColorMapper"},"formatter":{"id":"1182","type":"BasicTickFormatter"},"label_standoff":8,"location":[0,0],"major_tick_line_color":{"value":"black"},"ticker":{"id":"1170","type":"LogTicker"}},"id":"1171","type":"ColorBar"},{"attributes":{},"id":"1182","type":"BasicTickFormatter"},{"attributes":{},"id":"1151","type":"ResetTool"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_multi":null,"active_scroll":"auto","active_tap":"auto","tools":[{"id":"1127","type":"HoverTool"},{"id":"1147","type":"SaveTool"},{"id":"1148","type":"PanTool"},{"id":"1149","type":"WheelZoomTool"},{"id":"1150","type":"BoxZoomTool"},{"id":"1151","type":"ResetTool"}]},"id":"1152","type":"Toolbar"},{"attributes":{},"id":"1170","type":"LogTicker"},{"attributes":{"axis_label":"unique_tenderers","bounds":"auto","formatter":{"id":"1173","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"1138","type":"BasicTicker"}},"id":"1137","type":"LinearAxis"},{"attributes":{"fill_alpha":{"value":0.8},"fill_color":{"field":"color","transform":{"id":"1159","type":"LogColorMapper"}},"line_alpha":{"value":0.8},"line_color":{"field":"color","transform":{"id":"1159","type":"LogColorMapper"}},"size":{"units":"screen","value":9},"x":{"field":"unique_tenderers"},"y":{"field":"unique_winners"}},"id":"1163","type":"Scatter"},{"attributes":{"fill_alpha":{"value":0.2},"fill_color":{"field":"color","transform":{"id":"1159","type":"LogColorMapper"}},"line_alpha":{"value":0.2},"line_color":{"field":"color","transform":{"id":"1159","type":"LogColorMapper"}},"size":{"units":"screen","value":9},"x":{"field":"unique_tenderers"},"y":{"field":"unique_winners"}},"id":"1167","type":"Scatter"},{"attributes":{"text":"","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"1129","type":"Title"},{"attributes":{"callback":null,"end":3463.0,"reset_end":3463.0,"reset_start":1.0,"start":1.0,"tags":[[["unique_tenderers","unique_tenderers",null]]]},"id":"1125","type":"Range1d"}],"root_ids":["1128"]},"title":"Bokeh Application","version":"1.4.0"}};
+  var render_items = [{"docid":"77ac0c0d-c431-4be7-99a2-e93b6b88edc5","roots":{"1128":"1edcc6b4-ab6e-474f-9f62-1d8b191abd4e"}}];
+  root.Bokeh.embed.embed_items_notebook(docs_json, render_items);
+
+  }
+  if (root.Bokeh !== undefined) {
+    embed_document(root);
+  } else {
+    var attempts = 0;
+    var timer = setInterval(function(root) {
+      if (root.Bokeh !== undefined) {
+        clearInterval(timer);
+        embed_document(root);
+      } else {
+        attempts++;
+        if (attempts > 100) {
+          clearInterval(timer);
+          console.log("Bokeh: ERROR: Unable to run BokehJS code because BokehJS library is missing");
+        }
+      }
+    }, 10, root)
+  }
+})(window);
+</script>
+</div>
