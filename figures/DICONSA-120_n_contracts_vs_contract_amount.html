@@ -1,0 +1,833 @@
+
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-tables-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-gl-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/jquery-2.1.4.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/ui/1.10.4/jquery-ui.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.1.20/require.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js" type="text/javascript"></script>
+<script type="text/javascript">function HoloViewsWidget() {
+}
+
+HoloViewsWidget.prototype.init_slider = function(init_val){
+  if(this.load_json) {
+    this.from_json()
+  } else {
+    this.update_cache();
+  }
+}
+
+HoloViewsWidget.prototype.populate_cache = function(idx){
+  this.cache[idx].innerHTML = this.frames[idx];
+  if (this.embed) {
+    delete this.frames[idx];
+  }
+}
+
+HoloViewsWidget.prototype.process_error = function(msg){
+}
+
+HoloViewsWidget.prototype.from_json = function() {
+  var data_url = this.json_path + this.id + '.json';
+  $.getJSON(data_url, $.proxy(function(json_data) {
+    this.frames = json_data;
+    this.update_cache();
+    this.update(0);
+  }, this));
+}
+
+HoloViewsWidget.prototype.dynamic_update = function(current){
+  if (current === undefined) {
+    return
+  }
+  this.current = current;
+  if (this.comm) {
+    var msg = {comm_id: this.id+'_client', content: current}
+    this.comm.send(msg);
+  }
+}
+
+HoloViewsWidget.prototype.update_cache = function(force){
+  var frame_len = Object.keys(this.frames).length;
+  for (var i=0; i<frame_len; i++) {
+    if(!this.load_json || this.dynamic)  {
+      var frame = Object.keys(this.frames)[i];
+    } else {
+      var frame = i;
+    }
+    if(!(frame in this.cache) || force) {
+      if ((frame in this.cache) && force) { this.cache[frame].remove() }
+      var div = document.createElement("div");
+      var parent = document.getElementById("_anim_img"+this.id);
+      div.style.display = "none";
+      parent.appendChild(div)
+      this.cache[frame] = div;
+      var cache_id = "_anim_img"+this.id+"_"+frame;
+      this.populate_cache(frame);
+    }
+  }
+}
+
+HoloViewsWidget.prototype.update = function(current){
+  if(current in this.cache) {
+    for (var index in this.cache) {
+      this.cache[index].style.display = "none";
+    }
+    this.cache[current].style.display = "";
+    this.wait = false;
+  }
+}
+
+HoloViewsWidget.prototype.init_comms = function() {
+  var that = this
+  HoloViews.comm_manager.register_target(this.plot_id, this.id, function (msg) { that.msg_handler(msg) })
+  if (!this.cached || this.dynamic) {
+    function ack_callback(msg) {
+      var msg = msg.metadata;
+      var comm_id = msg.comm_id;
+      var comm_status = HoloViews.comm_status[comm_id];
+      if (that.queue.length > 0) {
+        that.time = Date.now();
+        that.dynamic_update(that.queue[that.queue.length-1]);
+        that.queue = [];
+      } else {
+        that.wait = false;
+      }
+      if ((msg.msg_type == "Ready") && msg.content) {
+        console.log("Python callback returned following output:", msg.content);
+      } else if (msg.msg_type == "Error") {
+        console.log("Python failed with the following traceback:", msg.traceback)
+      }
+    }
+    var comm = HoloViews.comm_manager.get_client_comm(this.plot_id, this.id+'_client', ack_callback);
+    return comm
+  }
+}
+
+HoloViewsWidget.prototype.msg_handler = function(msg) {
+  var metadata = msg.metadata;
+  if ((metadata.msg_type == "Ready")) {
+    if (metadata.content) {
+      console.log("Python callback returned following output:", metadata.content);
+    }
+	return;
+  } else if (metadata.msg_type == "Error") {
+    console.log("Python failed with the following traceback:", metadata.traceback)
+    return
+  }
+  this.process_msg(msg)
+}
+
+HoloViewsWidget.prototype.process_msg = function(msg) {
+}
+
+function SelectionWidget(frames, id, slider_ids, keyMap, dim_vals, notFound, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.frames = frames;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.slider_ids = slider_ids;
+  this.keyMap = keyMap
+  this.current_frame = 0;
+  this.current_vals = dim_vals;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.notFound = notFound;
+  this.cached = cached;
+  this.dynamic = dynamic;
+  this.cache = {};
+  this.json_path = json_path;
+  this.init_slider(this.current_vals[0]);
+  this.queue = [];
+  this.wait = false;
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms();
+  }
+}
+
+SelectionWidget.prototype = new HoloViewsWidget;
+
+
+SelectionWidget.prototype.get_key = function(current_vals) {
+  var key = "(";
+  for (var i=0; i<this.slider_ids.length; i++)
+  {
+    var val = this.current_vals[i];
+    if (!(typeof val === 'string')) {
+      if (val % 1 === 0) { val = val.toFixed(1); }
+      else { val = val.toFixed(10); val = val.slice(0, val.length-1);}
+    }
+    key += "'" + val + "'";
+    if(i != this.slider_ids.length-1) { key += ', ';}
+    else if(this.slider_ids.length == 1) { key += ',';}
+  }
+  key += ")";
+  return this.keyMap[key];
+}
+
+SelectionWidget.prototype.set_frame = function(dim_val, dim_idx){
+  this.current_vals[dim_idx] = dim_val;
+  var key = this.current_vals;
+  if (!this.dynamic) {
+    key = this.get_key(key)
+  }
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(key);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.current_frame = key;
+    this.wait = true;
+    this.dynamic_update(key)
+  } else if (key !== undefined) {
+    this.update(key)
+  }
+}
+
+
+/* Define the ScrubberWidget class */
+function ScrubberWidget(frames, num_frames, id, interval, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.slider_id = "_anim_slider" + id;
+  this.loop_select_id = "_anim_loop_select" + id;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.interval = interval;
+  this.current_frame = 0;
+  this.direction = 0;
+  this.dynamic = dynamic;
+  this.timer = null;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.cached = cached;
+  this.frames = frames;
+  this.cache = {};
+  this.length = num_frames;
+  this.json_path = json_path;
+  document.getElementById(this.slider_id).max = this.length - 1;
+  this.init_slider(0);
+  this.wait = false;
+  this.queue = [];
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms()
+  }
+}
+
+ScrubberWidget.prototype = new HoloViewsWidget;
+
+ScrubberWidget.prototype.set_frame = function(frame){
+  this.current_frame = frame;
+  var widget = document.getElementById(this.slider_id);
+  if (widget === null) {
+    this.pause_animation();
+    return
+  }
+  widget.value = this.current_frame;
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(frame);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.wait = true;
+    this.dynamic_update(frame)
+  } else {
+    this.update(frame)
+  }
+}
+
+ScrubberWidget.prototype.get_loop_state = function(){
+  var button_group = document[this.loop_select_id].state;
+  for (var i = 0; i < button_group.length; i++) {
+    var button = button_group[i];
+    if (button.checked) {
+      return button.value;
+    }
+  }
+  return undefined;
+}
+
+
+ScrubberWidget.prototype.next_frame = function() {
+  this.set_frame(Math.min(this.length - 1, this.current_frame + 1));
+}
+
+ScrubberWidget.prototype.previous_frame = function() {
+  this.set_frame(Math.max(0, this.current_frame - 1));
+}
+
+ScrubberWidget.prototype.first_frame = function() {
+  this.set_frame(0);
+}
+
+ScrubberWidget.prototype.last_frame = function() {
+  this.set_frame(this.length - 1);
+}
+
+ScrubberWidget.prototype.slower = function() {
+  this.interval /= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.faster = function() {
+  this.interval *= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.anim_step_forward = function() {
+  if(this.current_frame < this.length - 1){
+    this.next_frame();
+  }else{
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.first_frame();
+    }else if(loop_state == "reflect"){
+      this.last_frame();
+      this.reverse_animation();
+    }else{
+      this.pause_animation();
+      this.last_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.anim_step_reverse = function() {
+  if(this.current_frame > 0){
+    this.previous_frame();
+  } else {
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.last_frame();
+    }else if(loop_state == "reflect"){
+      this.first_frame();
+      this.play_animation();
+    }else{
+      this.pause_animation();
+      this.first_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.pause_animation = function() {
+  this.direction = 0;
+  if (this.timer){
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+}
+
+ScrubberWidget.prototype.play_animation = function() {
+  this.pause_animation();
+  this.direction = 1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_forward();}, this.interval);
+}
+
+ScrubberWidget.prototype.reverse_animation = function() {
+  this.pause_animation();
+  this.direction = -1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_reverse();}, this.interval);
+}
+
+function extend(destination, source) {
+  for (var k in source) {
+    if (source.hasOwnProperty(k)) {
+      destination[k] = source[k];
+    }
+  }
+  return destination;
+}
+
+function update_widget(widget, values) {
+  if (widget.hasClass("ui-slider")) {
+    widget.slider('option', {
+      min: 0,
+      max: values.length-1,
+      dim_vals: values,
+      value: 0,
+      dim_labels: values
+    })
+    widget.slider('option', 'slide').call(widget, event, {value: 0})
+  } else {
+    widget.empty();
+    for (var i=0; i<values.length; i++){
+      widget.append($("<option>", {
+        value: i,
+        text: values[i]
+      }))
+    };
+    widget.data('values', values);
+    widget.data('value', 0);
+    widget.trigger("change");
+  };
+}
+
+function init_slider(id, plot_id, dim, values, next_vals, labels, dynamic, step, value, next_dim,
+                     dim_idx, delay, jQueryUI_CDN, UNDERSCORE_CDN) {
+  // Slider JS Block START
+  function loadcssfile(filename){
+    var fileref=document.createElement("link")
+    fileref.setAttribute("rel", "stylesheet")
+    fileref.setAttribute("type", "text/css")
+    fileref.setAttribute("href", filename)
+    document.getElementsByTagName("head")[0].appendChild(fileref)
+  }
+  loadcssfile("https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css");
+  /* Check if jQuery and jQueryUI have been loaded
+     otherwise load with require.js */
+  var jQuery = window.jQuery,
+    // check for old versions of jQuery
+    oldjQuery = jQuery && !!jQuery.fn.jquery.match(/^1\.[0-4](\.|$)/),
+    jquery_path = '',
+    paths = {},
+    noConflict;
+  var jQueryUI = jQuery.ui;
+  // check for jQuery
+  if (!jQuery || oldjQuery) {
+    // load if it's not available or doesn't meet min standards
+    paths.jQuery = jQuery;
+    noConflict = !!oldjQuery;
+  } else {
+    // register the current jQuery
+    define('jquery', [], function() { return jQuery; });
+  }
+  if (!jQueryUI) {
+    paths.jQueryUI = jQueryUI_CDN.slice(null, -3);
+  } else {
+    define('jQueryUI', [], function() { return jQuery.ui; });
+  }
+  paths.underscore = UNDERSCORE_CDN.slice(null, -3);
+  var jquery_require = {
+    paths: paths,
+    shim: {
+      "jQueryUI": {
+        exports:"$",
+        deps: ['jquery']
+      },
+      "underscore": {
+        exports: '_'
+      }
+    }
+  }
+  require.config(jquery_require);
+  require(["jQueryUI", "underscore"], function(jUI, _){
+    if (noConflict) $.noConflict(true);
+    var vals = values;
+    if (dynamic && vals.constructor === Array) {
+      var default_value = parseFloat(value);
+      var min = parseFloat(vals[0]);
+      var max = parseFloat(vals[vals.length-1]);
+      var wstep = step;
+      var wlabels = [default_value];
+      var init_label = default_value;
+    } else {
+      var min = 0;
+      if (dynamic) {
+        var max = Object.keys(vals).length - 1;
+        var init_label = labels[value];
+        var default_value = values[value];
+      } else {
+        var max = vals.length - 1;
+        var init_label = labels[value];
+        var default_value = value;
+      }
+      var wstep = 1;
+      var wlabels = labels;
+    }
+    function adjustFontSize(text) {
+      var width_ratio = (text.parent().width()/8)/text.val().length;
+      var size = Math.min(0.9, Math.max(0.6, width_ratio))+'em';
+      text.css('font-size', size);
+    }
+    var slider = $('#_anim_widget'+id+'_'+dim);
+    slider.slider({
+      animate: "fast",
+      min: min,
+      max: max,
+      step: wstep,
+      value: default_value,
+      dim_vals: vals,
+      dim_labels: wlabels,
+      next_vals: next_vals,
+      slide: function(event, ui) {
+        var vals = slider.slider("option", "dim_vals");
+        var next_vals = slider.slider("option", "next_vals");
+        var dlabels = slider.slider("option", "dim_labels");
+        if (dynamic) {
+          var dim_val = ui.value;
+          if (vals.constructor === Array) {
+            var label = ui.value;
+          } else {
+            var label = dlabels[ui.value];
+          }
+        } else {
+          var dim_val = vals[ui.value];
+          var label = dlabels[ui.value];
+        }
+        var text = $('#textInput'+id+'_'+dim);
+        text.val(label);
+        adjustFontSize(text);
+        HoloViews.index[plot_id].set_frame(dim_val, dim_idx);
+        if (Object.keys(next_vals).length > 0) {
+          var new_vals = next_vals[dim_val];
+          var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+          update_widget(next_widget, new_vals);
+        }
+      }
+    });
+    slider.keypress(function(event) {
+      if (event.which == 80 || event.which == 112) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "max");
+        for (var i=start; i<=stop; i++) {
+          var delay = i*delay;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+      if (event.which == 82 || event.which == 114) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "min");
+        var count = 0;
+        for (var i=start; i>=stop; i--) {
+          var delay = count*delay;
+          count = count + 1;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+    });
+    var textInput = $('#textInput'+id+'_'+dim)
+    textInput.val(init_label);
+    adjustFontSize(textInput);
+  });
+}
+
+function init_dropdown(id, plot_id, dim, vals, value, next_vals, labels, next_dim, dim_idx, dynamic) {
+  var widget = $("#_anim_widget"+id+'_'+dim);
+  widget.data('values', vals)
+  for (var i=0; i<vals.length; i++){
+    if (dynamic) {
+      var val = vals[i];
+    } else {
+      var val = i;
+    }
+    widget.append($("<option>", {
+      value: val,
+      text: labels[i]
+    }));
+  };
+  widget.data("next_vals", next_vals);
+  widget.val(value);
+  widget.on('change', function(event, ui) {
+    if (dynamic) {
+      var dim_val = parseInt(this.value);
+    } else {
+      var dim_val = $.data(this, 'values')[this.value];
+    }
+    var next_vals = $.data(this, "next_vals");
+    if (Object.keys(next_vals).length > 0) {
+      var new_vals = next_vals[dim_val];
+      var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+      update_widget(next_widget, new_vals);
+    }
+    var widgets = HoloViews.index[plot_id]
+    if (widgets) {
+      widgets.set_frame(dim_val, dim_idx);
+    }
+  });
+}
+
+
+if (window.HoloViews === undefined) {
+  window.HoloViews = {}
+  window.PyViz = window.HoloViews
+} else if (window.PyViz === undefined) {
+  window.PyViz = window.HoloViews
+}
+
+
+var _namespace = {
+  init_slider: init_slider,
+  init_dropdown: init_dropdown,
+  comms: {},
+  comm_status: {},
+  index: {},
+  plot_index: {},
+  kernels: {},
+  receivers: {}
+}
+
+for (var k in _namespace) {
+  if (!(k in window.HoloViews)) {
+    window.HoloViews[k] = _namespace[k];
+  }
+}
+
+// Define Bokeh specific subclasses
+function BokehSelectionWidget() {
+  SelectionWidget.apply(this, arguments);
+}
+
+function BokehScrubberWidget() {
+  ScrubberWidget.apply(this, arguments);
+}
+
+// Let them inherit from the baseclasses
+BokehSelectionWidget.prototype = Object.create(SelectionWidget.prototype);
+BokehScrubberWidget.prototype = Object.create(ScrubberWidget.prototype);
+
+// Define methods to override on widgets
+var BokehMethods = {
+  update_cache : function(){
+    for (var index in this.frames) {
+      this.frames[index] = JSON.parse(this.frames[index]);
+    }
+  },
+  update : function(current){
+    if (current === undefined) {
+      return;
+    }
+    var data = this.frames[current];
+    if (data !== undefined) {
+      if (data.root in HoloViews.plot_index) {
+        var doc = HoloViews.plot_index[data.root].model.document;
+      } else {
+        var doc = Bokeh.index[data.root].model.document;
+      }
+      doc.apply_json_patch(data.content);
+    }
+  },
+  init_comms: function() {
+    if (Bokeh.protocol !== undefined) {
+      this.receiver = new Bokeh.protocol.Receiver()
+    } else {
+      this.receiver = null;
+    }
+    return HoloViewsWidget.prototype.init_comms.call(this);
+  },
+  process_msg : function(msg) {
+    if (this.plot_id in HoloViews.plot_index) {
+      var doc = HoloViews.plot_index[this.plot_id].model.document;
+    } else {
+      var doc = Bokeh.index[this.plot_id].model.document;
+    }
+    if (this.receiver === null) { return }
+    var receiver = this.receiver;
+    if (msg.buffers.length > 0) {
+      receiver.consume(msg.buffers[0].buffer)
+    } else {
+      receiver.consume(msg.content.data)
+    }
+    const comm_msg = receiver.message;
+    if ((comm_msg != null) && (doc != null)) {
+      doc.apply_json_patch(comm_msg.content, comm_msg.buffers)
+    }
+  }
+}
+
+// Extend Bokeh widgets with backend specific methods
+extend(BokehSelectionWidget.prototype, BokehMethods);
+extend(BokehScrubberWidget.prototype, BokehMethods);
+
+window.HoloViews.BokehSelectionWidget = BokehSelectionWidget
+window.HoloViews.BokehScrubberWidget = BokehScrubberWidget
+</script>
+<script type="text/javascript">
+    function JupyterCommManager() {
+    }
+
+    JupyterCommManager.prototype.register_target = function(plot_id, comm_id, msg_handler) {
+      if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        comm_manager.register_target(comm_id, function(comm) {
+          comm.on_msg(msg_handler);
+        });
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        window.PyViz.kernels[plot_id].registerCommTarget(comm_id, function(comm) {
+          comm.onMsg = msg_handler;
+        });
+      }
+    }
+
+    JupyterCommManager.prototype.get_client_comm = function(plot_id, comm_id, msg_handler) {
+      if (comm_id in window.PyViz.comms) {
+        return window.PyViz.comms[comm_id];
+      } else if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        var comm = comm_manager.new_comm(comm_id, {}, {}, {}, comm_id);
+        if (msg_handler) {
+          comm.on_msg(msg_handler);
+        }
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        var comm = window.PyViz.kernels[plot_id].connectToComm(comm_id);
+        comm.open();
+        if (msg_handler) {
+          comm.onMsg = msg_handler;
+        }
+      }
+
+      window.PyViz.comms[comm_id] = comm;
+      return comm;
+    }
+
+    window.PyViz.comm_manager = new JupyterCommManager();
+    </script>
+
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+<style>div.bk-hbox {
+    display: flex;
+    justify-content: center;
+}
+
+div.bk-hbox div.bk-plot {
+    padding: 8px;
+}
+
+div.bk-hbox div.bk-data-table {
+    padding: 20px;
+}
+
+div.hololayout {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
+div.holoframe {
+  width: 75%;
+}
+
+div.holowell {
+  display: flex;
+  align-items: center;
+}
+
+form.holoform {
+  background-color: #fafafa;
+  border-radius: 5px;
+  overflow: hidden;
+  padding-left: 0.8em;
+  padding-right: 0.8em;
+  padding-top: 0.4em;
+  padding-bottom: 0.4em;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.05);
+  margin-bottom: 20px;
+  border: 1px solid #e3e3e3;
+}
+
+div.holowidgets {
+  padding-right: 0;
+  width: 25%;
+}
+
+div.holoslider {
+  min-height: 0 !important;
+  height: 0.8em;
+  width: 100%;
+}
+
+div.holoformgroup {
+  padding-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+div.hologroup {
+  padding-left: 0;
+  padding-right: 0.8em;
+  width: 100%;
+}
+
+.holoselect {
+  width: 92%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.holotext {
+  padding-left:  0.5em;
+  padding-right: 0;
+  width: 100%;
+}
+
+.holowidgets .ui-resizable-se {
+  visibility: hidden
+}
+
+.holoframe > .ui-resizable-se {
+  visibility: hidden
+}
+
+.holowidgets .ui-resizable-s {
+  visibility: hidden
+}
+
+
+/* CSS rules for noUISlider based slider used by JupyterLab extension  */
+
+.noUi-handle {
+  width: 20px !important;
+  height: 20px !important;
+  left: -5px !important;
+  top: -5px !important;
+}
+
+.noUi-handle:before, .noUi-handle:after {
+  visibility: hidden;
+  height: 0px;
+}
+
+.noUi-target {
+  margin-left: 0.5em;
+  margin-right: 0.5em;
+}
+</style><div style='display: table; margin: 0 auto;'>
+
+
+
+
+
+
+  <div class="bk-root" id="3c7e532e-b1f5-4a37-96f8-8e4137331138" data-root-id="1252"></div>
+
+<script type="text/javascript">
+  (function(root) {
+  function embed_document(root) {
+    
+  var docs_json = {"a17ebbc6-4f3e-4d53-ba24-f55450b4908d":{"roots":{"references":[{"attributes":{"align":null,"below":[{"id":"1261","type":"LogAxis"}],"center":[{"id":"1265","type":"Grid"},{"id":"1270","type":"Grid"}],"left":[{"id":"1266","type":"LogAxis"}],"margin":null,"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_width":800,"renderers":[{"id":"1292","type":"GlyphRenderer"}],"right":[{"id":"1295","type":"ColorBar"}],"sizing_mode":"fixed","title":{"id":"1253","type":"Title"},"toolbar":{"id":"1276","type":"Toolbar"},"x_range":{"id":"1249","type":"Range1d"},"x_scale":{"id":"1257","type":"LogScale"},"y_range":{"id":"1250","type":"Range1d"},"y_scale":{"id":"1259","type":"LogScale"}},"id":"1252","subtype":"Figure","type":"Plot"},{"attributes":{"overlay":{"id":"1307","type":"BoxAnnotation"}},"id":"1274","type":"BoxZoomTool"},{"attributes":{},"id":"1272","type":"PanTool"},{"attributes":{"source":{"id":"1284","type":"ColumnDataSource"}},"id":"1293","type":"CDSView"},{"attributes":{},"id":"1271","type":"SaveTool"},{"attributes":{"ticker":null},"id":"1299","type":"LogTickFormatter"},{"attributes":{"text":"DICONSA-120","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"1253","type":"Title"},{"attributes":{"axis_label":"n_contracts","bounds":"auto","formatter":{"id":"1297","type":"LogTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"1262","type":"LogTicker"}},"id":"1261","type":"LogAxis"},{"attributes":{},"id":"1259","type":"LogScale"},{"attributes":{"fill_alpha":{"value":0.5},"fill_color":{"field":"color","transform":{"id":"1283","type":"LinearColorMapper"}},"line_alpha":{"value":0.5},"line_color":{"field":"color","transform":{"id":"1283","type":"LinearColorMapper"}},"size":{"units":"screen","value":7},"x":{"field":"n_contracts"},"y":{"field":"contract_amount"}},"id":"1288","type":"Scatter"},{"attributes":{"callback":null,"end":6188.999999999989,"reset_end":6188.999999999989,"reset_start":1.0,"start":1.0,"tags":[[["n_contracts","n_contracts",null]]]},"id":"1249","type":"Range1d"},{"attributes":{"data_source":{"id":"1284","type":"ColumnDataSource"},"glyph":{"id":"1287","type":"Scatter"},"hover_glyph":{"id":"1290","type":"Scatter"},"muted_glyph":{"id":"1291","type":"Scatter"},"nonselection_glyph":{"id":"1288","type":"Scatter"},"selection_glyph":{"id":"1289","type":"Scatter"},"view":{"id":"1293","type":"CDSView"}},"id":"1292","type":"GlyphRenderer"},{"attributes":{"num_minor_ticks":10},"id":"1267","type":"LogTicker"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"1307","type":"BoxAnnotation"},{"attributes":{"callback":null,"end":1308419986.7519977,"reset_end":1308419986.7519977,"reset_start":1.0,"start":1.0,"tags":[[["contract_amount","contract_amount",null]]]},"id":"1250","type":"Range1d"},{"attributes":{"fill_alpha":{"value":0.5},"fill_color":{"field":"color","transform":{"id":"1283","type":"LinearColorMapper"}},"line_alpha":{"value":0.5},"line_color":{"field":"color","transform":{"id":"1283","type":"LinearColorMapper"}},"size":{"units":"screen","value":7},"x":{"field":"n_contracts"},"y":{"field":"contract_amount"}},"id":"1289","type":"Scatter"},{"attributes":{},"id":"1275","type":"ResetTool"},{"attributes":{"fill_alpha":{"value":0.5},"fill_color":{"field":"color","transform":{"id":"1283","type":"LinearColorMapper"}},"line_alpha":{"value":0.5},"line_color":{"field":"color","transform":{"id":"1283","type":"LinearColorMapper"}},"size":{"units":"screen","value":7},"x":{"field":"n_contracts"},"y":{"field":"contract_amount"}},"id":"1290","type":"Scatter"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_multi":null,"active_scroll":"auto","active_tap":"auto","tools":[{"id":"1251","type":"HoverTool"},{"id":"1271","type":"SaveTool"},{"id":"1272","type":"PanTool"},{"id":"1273","type":"WheelZoomTool"},{"id":"1274","type":"BoxZoomTool"},{"id":"1275","type":"ResetTool"}]},"id":"1276","type":"Toolbar"},{"attributes":{"ticker":null},"id":"1297","type":"LogTickFormatter"},{"attributes":{},"id":"1309","type":"UnionRenderers"},{"attributes":{"bar_line_color":{"value":"black"},"color_mapper":{"id":"1283","type":"LinearColorMapper"},"formatter":{"id":"1306","type":"BasicTickFormatter"},"label_standoff":8,"location":[0,0],"major_tick_line_color":{"value":"black"},"ticker":{"id":"1294","type":"BasicTicker"}},"id":"1295","type":"ColorBar"},{"attributes":{},"id":"1257","type":"LogScale"},{"attributes":{},"id":"1285","type":"Selection"},{"attributes":{"grid_line_color":null,"ticker":{"id":"1262","type":"LogTicker"}},"id":"1265","type":"Grid"},{"attributes":{"callback":null,"data":{"color":[2,1,1,1,1,1,1,2,2,1,1,2,1,1,2,1,1,1,1,1,2,2,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,2,2,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1,1,1,1,2,2,1,1,1,1,1,1,1,1,2,1,1,1,2,1,1,1,1,1,1,1,1,1,1,2,2,1,1,1,1,2,1,2,1,1,1,1,1,1,1,1,1,2,2,2,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,2,1,2,1,1,1,2,1,2,2,1,1,2,1,2,1,1,1,1,1,1,1,2,1,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,1,2,1,2,1,2,1,1,1,1,1,1,1,1,1,1,1,2,1,1,2,1,1,1,1,2,2,1,1,1,2,1,2,2,1,2,2,1,1,1,1,2,1,1,2,1,2,2,3,2,1,1,2,1,1,1,1,1,1,1,2,1,2,2,1,1,2,1,1,1,1,1,1,1,1,1,1,1,2,1,1,2,1,1,1,1,1,1,1,1,2,1,1,1,1,1,1,2,2,2,4,2,1,2,1,1,1,1,1,1,1,1,1,2,1,2,1,1,1,5,1,1,2,1,1,2,1,1,1,1,1,3,1,5,1,1,1,1,1,3,3,2,2,5,4,3,1,1,1,2,2,2,2,1,1,1,1,2,2,2,2,1,2,2,1,1,1,1,5,4,1,2,1,1,1,2,2,2,1,1,1,2,2,1,1,2,1,1,2,1,1,1,2,1,1,5,2,2,1,3,1,1,1,1,1,1,1,1,3,2,1,1,3,1,1,2,1,2,1,2,1,2,2,1,1,1,1,1,2,3,1,2,1,4,2,2,2,1,2,1,1,1,1,3,1,1,1,2,2,1,1,1,4,2,5,1,1,4,5,1,2,1,1,2,3,2,1,5,5,2,1,3,1,2,1,2,1,1,2,2,5,1,2,2,1,1,1,1,5,4,1,1,4,1,1,2,1,2,1,2,2,1,3,4,2,1,1,1,2,2,1,1,5,1,1,1,1,3,2,2,1,1,2,1,2,2,2,2,1,1,2,3,2,1,1,3,1,2,2,1,1,2,2,1,1,5,1,1,2,1,1,1,1,1,1,1,2,1,1,1,1,2,1,1,2,1,1,2,1,1,1,2,2,1,3,1,5,1,2,2,3,1,2,1,2,1,1,2,4,2,1,1,2,2,1,3,1,1,1,1,1,2,1,5,1,1,2,1,1,1,1,4,2,1,2,2,2,1,2,1,1,2,1,1,1,1,3,1,3,1,3,1,1,1,1,1,2,3,2,1,2,2,2,2,2,1,2,1,4,1,2,1,1,1,1,1,1,1,1,2,1,2,1,1,1,2,2,1,1,1,1,2,1,1,1,2,1,5,2,2,3,1,1,2,3,2,1,1,3,1,3,2,1,1,1,1,1,1,2,1,1,1,1,2,1,3,2,1,2,1,2,1,1,2,1,1,1,4,1,4,5,2,2,2,1,1,1,1,4,1,3,1,2,1,1,1,2,2,2,1,2,2,2,2,2,1,3,1,1,2,3,2,1,1,2,2,3,1,3,1,1,1,1,2,1,1,3,1,3,1,1,1,3,1,1,2,3,1,2,1,3,2,1,1,2,4,4,2,3,3,2,1,4,1,4,1,1,1,3,3,2,1,1,1,2,1,1,1,1,4,1,1,2,5,3,2,1,1,3,1,1,1,1,2,4,4,4,1,2,5,1,2,2,1,1,1,1,1,1,2,2,1,1,2,1,1,2,1,3,5,1,1,3,5,4,4,2,1,2,5,4,2,5,1,1,1,1,1,2,2,1,1,2,2,1,1,4,3,1,1,1,1,1,2,1,2,4,2,2,1,2,2,1,1,1,1,5,1,1,1,4,1,4,3,2,1,3,1,1,2,1,1,1,2,1,2,5,1,1,2,1,1,1,2,1,1,1,1,2,1,1,1,2,3,5,2,4,1,1,3,1,2,2,1,2,3,2,1,1,5,1,1,2,1,1,1,4,3,3,1,2,1,1,1,1,2,1,1,2,1,2,3,1,1,2,2,2,2,1,1,1,1,3,2,1,2,1,1,1,2,1,1,1,1,5,1,1,1,1,1,1,1,1,2,1,2,1,1,2,2,3,2,2,2,1,2,4,1,1,4,1,1,2,5,1,5,1,1,1,1,2,1,1,3,1,4,2,2,1,2,1,1,1,1,1,1,2,2,1,5,2,4,1,1,1,1,1,1,2,2,1,1,1,1,4,2,1,1,4,3,1,2,2,1,1,1,1,1,1,1,1,1,2,2,2,2,5,1,1,2,1,1,1,1,2,1,4,1,1,1,1,2,3,2,2,1,1,1,5,2],"contract_amount":{"__ndarray__":"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","dtype":"float64","shape":[1088]},"n_contracts":[6,2,2,1,1,1,1,4,2,1,2,7,1,1,14,1,1,1,1,2,12,38,1,50,1,3,1,1,1,2,1,2,5,1,1,1,1,1,3,1,1,1,1,1,1,1,1,3,3,2,1,3,1,2,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,3,1,1,2,1,64,3,2,1,1,1,11,2,1,2,3,1,3,1,228,1,1,1,2,2,2,2,1,1,1,2,2,1,1,1,1,3,1,2,1,2,1,2,2,1,2,2,2,2,3,3,2,1,2,1,1,1,1,3,1,1,1,1,1,1,1,10,1,2,1,2,2,5,1,3,3,1,1,3,2,3,2,2,1,1,1,1,3,74,1,1,1,3,1,1,1,1,3,1,12,1,1,1,1,1,2,2,3,1,23,1,4,1,53,1,1,3,1,1,1,2,2,1,1,2,2,1,1,3,15,2,1,1,3,3,1,1,1,69,1,2,19,1,2,3,1,1,2,1,3,2,1,4,1,3,3,18,16,1,1,2,1,1,2,1,2,1,2,2,1,3,4,1,1,2,1,2,2,1,1,2,2,1,2,1,2,2,1,1,2,1,1,1,1,17,2,1,2,5,14,1,1,1,1,1,132,49,3,373,48,2,85,1,1,1,1,1,1,1,1,1,5,1,12,1,1,1,757,6,2,6,9,3,2,1,3,2,1,1,100,1,481,2,4,1,16,1,4,67,2,58,2801,271,75,1,1,1,4,2,23,3,10,1,1,1,6,2,162,37,2,2,3,1,5,2,1,212,4,1,8,1,1,1,13,2,9,1,1,1,27,3,1,1,2,1,2,3,1,2,1,3,2,1,74,4,2,1,103,1,1,2,3,1,6,7,1,314,2,1,12,72,1,2,7,1,11,1,94,1,2,3,1,1,2,1,1,2,128,1,3,1,192,3,176,3,1,46,1,1,1,2,337,1,1,1,2,2,1,1,1,92,14,2098,1,2,400,1314,1,55,6,14,3,95,3,1,1025,7,17,6,15,1,18,1,6,19,3,105,9,1160,1,27,8,2,6,2,1,255,530,1,1,122,4,2,27,4,298,13,16,155,1,22,357,9,2,1,1,2,47,1,1,2108,1,1,12,44,52,17,6,1,1,244,1,3,58,8,34,1,1,62,211,28,1,1,32,1,3,3,1,1,4,2,2,1,330,1,2,3,8,6,1,2,3,5,1,49,2,1,1,1,10,2,1,3,1,2,72,3,1,2,60,12,1,48,2,864,1,26,3,23,1,13,1,3,1,1,3,206,20,6,1,28,3,1,109,3,2,1,1,1,6,1,262,1,1,16,1,1,1,25,16,4,2,148,6,8,3,3,1,2,2,1,1,1,1,82,1,87,2,5,6,1,1,1,2,18,107,3,1,19,3,2,3,2,1,3,1,200,1,3,25,3,1,1,1,1,2,2,18,1,3,1,1,1,3,3,3,1,1,1,5,2,1,1,13,1,3140,38,33,38,1,1,26,412,3,1,1,17,1,187,23,1,1,5,1,1,1,3,2,1,6,1,14,1,149,64,25,2,1,24,1,2,8,1,3,2,828,1,635,584,25,3,3,2,1,1,4,396,1,370,1,153,20,1,1,3,2,22,1,4,2,34,9,2,1,12,1,2,615,8,13,1,38,85,92,468,18,74,1,1,1,1,10,7,2,196,1,232,1,1,1,213,1,1,11,149,1,146,1,791,17,1,1,7,770,187,2,83,30,14,1,872,1,87,1,1,1,23,17,3,1,1,4,3,1,7,1,2,248,1,1,19,546,404,99,1,2,3,7,1,2,2,12,293,379,117,1,4,3284,1,2,3,1,1,1,1,1,1,2,9,1,2,15,2,2,2,21,44,1016,1,1,326,1213,159,175,3,1,4,2221,398,4,2725,2,1,1,2,15,81,3,1,1,3,24,1,3,70,283,2,4,1,1,2,3,1,11,365,2,30,1,15,3,1,1,1,2,822,5,2,1,1872,1,156,1308,74,18,15,1,1,2,5,1,1,2,1,14,695,1,1,2,1,10,1,17,5,2,1,4,214,2,5,2,30,18,363,36,105,1,7,217,1,49,83,3,6,3,74,10,2,619,16,4,2,2,1,3,49,43,61,1,50,1,1,2,1,21,1,1,2,2,3,223,1,1,28,47,3,3,1,1,4,2,41,28,2,86,3,1,1,2,1,1,1,1,876,1,1,1,1,1,2,1,1,7,1,2,1,1,32,4,454,3,2,3,1,3,114,1,1,176,1,1,81,1216,2,826,2,1,2,3,4,1,1,29,3,5,26,13,1,9,1,6,1,2,1,1,4,2,1,6189,3,38,4,1,1,1,1,1,2,126,13,2,1,5,45,3,1,1,124,5,2,4,27,1,4,2,2,1,2,1,3,1,3,2,37,20,1633,1,1,3,1,4,1,1,3,2,6,1,2,1,1,7,95,2,3,1,1,5,254,3],"supplier_id":["0065DE9AB6FDDE03BACBABAE52FA7EA5","01043EF0BC22218A68D31481243E4D4B","013E79D8071707FB22BB9EB39F25CE86","01DD812040600104DFF693AF01A836CE","01EA703B729BB44040EFD759548251BA","032234302E6F99CF00B994DAC9D27650","03449DE08620C366BD098F7B40B9B47B","03720491C6384FD4B17798EDAB38657F","04769E54F42B8EA035ECF2F209986B25","0504232E9C8A6916C3613FF86CDEAFE7","050D44F01DE52B1324DE9A33D59E9171","055F85CE7A75A0320DD8AE0C7F0D3694","0585B240EDD7D1610385061DEA9F9ED6","06965D7F5AFB2D4DAACDB7E44DAF9C6D","06CA254E9CBA6BE6F014E942C2569F6C","06CC6A1836DD2EF57A563966ED06359E","07EA267554E3BAB4B1D6CE4FF3B521AB","08A26350F523193E02D4BF13C093A77A","09AC7EBBD6851AF4145D165502A68B17","09B25D5CAE4045CE78106FAFB8ECA1A8","09E005DA3904C8DCFF7A6DC24A660F84","0A3D516F7C149968D3A751E4FD38C3AE","0A501ACCC42DEB3DF04776C497E4E6F1","0A8C0298ABC2A5C896C0BC39FB9E2E2C","0B0162DF58E74BC024D85FD145F83DCB","0B6693753DAB4D5A081C56BB1AF1E0F2","0C922684CBF14DA1674F0DE6436CACD0","0C981921EA6A2287CFA10099D970D86A","0CEBB1E265802318C46E69E6A7970AC9","0D1F90AEA8815E0AD8DD46C633E671FB","0E225ABF5CD06A65D67F27517E616005","0EF76E7A4BC123A742F66A3E7FC34D69","0F0560A8891B672336B2777DDE8BE599","103620338938F6C17A92620904C1B5D3","1091B2C9114D8BE875122667BBD9930A","10BE379CEB2362E91276A48310495C39","10F7AF96F206BCE09D0347530620367B","114D9446C960FE88461B7B54D2D62184","12552698F0C2114FBE30C0D7C60EED14","12E930ECFE908CCF1207DC6570410C97","130DF9D1CEA341427F0EB5995CA75794","132C9D40D8F79BEF82595593F95AA284","143B57FC30CE4B7444D8F98F744FDB82","152F80D1DA41450DDFF18FF9A9DC3408","1562C7978265454EC55F401320EFFE04","162D69C22074DCF95D0EE2F10E11D259","167B74563F2C8FA11223EB8A2AC2B320","1B33C356C407DAEE175F4D510FE4F394","1BB44465648D98C3E030F0C79A368BE7","1D2CAFFAE3943383581A5DE331228E3F","1D52A47BD729A355F7DAD69607690452","1D5C29769C2A6702B41FE7F36A5B27C0","1F28FD6C117653E8213815BFC87802E2","1F53767ACFE5EC54B7D3EB752B763F1E","21153F6BB4FD4138F1F5C19CE520F726","215CC421B8A42CB1B92AA8D5F4A72ACF","21FBDE04B4D2E4A2AC304FB3FA85BE9E","22BF4FA429E8085329A5B024A79BE6A0","22DE0BD54CEC074E928FBF03086CC53C","238E61BD40B4AC8A9AD130FD1B0A4026","23981D0583655A2A7F2BAADE96D78B65","247ED5457D88811D75BB95BFB8B26950","250CCE3C3183E6E77342E57519D0E29F","25FB5B9961634774403A4F19DCBDBCBC","26B02842A7E982B662E34B1B82D539BA","271986CD11BB1CC849D49C58BD3C024F","2743C696B4D6A608BFCEFC2FC7143083","28ECDD69C6FA5D3C7A45A07B55B48DC2","2A343D7389B75C2E45C3ABB33E904D66","2AF3BAAC834A894976B04333D9D5E002","2BA32330F71EED4EFE6AEDFBB0222C6E","2C486E2566A4ACE224699FE9A8542DA9","2C81B6C875DA7DC01A671760F96AE326","2DFD12A5F760DA49275056D972E88338","2EC3C2F148EC04A11767052E6FB1EB0B","2F1DB9520904E5A6EF3B2442D54A12C1","304E56D9562816D3886760D9C825143C","308C1DDE8AABE97FBE8C633B503F08A5","3183EF1F2F0F8577AE1BC996B0948F15","32A2FEB1CF82C489830A5BDA1D290951","33ADADBFD0813FA7E53C4863767DCA51","344F80B3D75076A2315D793D1B1D7DA1","348A476B7359B0FC21D3E6BE316FAD8F","35E87D0C36FAF2132121239A2A63C422","35F0C0C6EAF4F4BA0B214A529D621954","36523269DC77946BF4F737D056B64C28","36C2EF92ECB357E443D6B5FAD5B009D9","36D296439DFFCD88E1002EF7044FB4B4","37661D27D69EED35999166EA7C0130BC","3771918C1AE206836E0EAAD79E0CF345","3C1C6042422D90B5EE69EC47760B445D","3DC5A11960FC642D6E0B66D22EF2E555","3F549B56B27C22EC21B192158A4E6ACD","3FFE22ADF32ABAC08296F8C18DC1D8F4","40031D261D53AA6ACB5BA3CE1027BB66","4061F3244B6ABFB1D5C5DE1013D3807C","40B0060BA64526613295EC1531E3D8EC","40F47144D13EA49186CCDFDF893EF9BF","41463244935FFB3D6B7673DC3E5DA99E","41BC9046F225084379F2B0BF1F3C8B2B","4255EE34D157279A031B8B17D7E5BAAB","43DBC4E2FE3444FDB442DC2A8CBCE594","466824E54D30BA40F0B14FF9AEB51F38","46CC243E693ED84DF3BDD945F9B582BA","48C1DCEFA28D4EFB2C8F46AD4FA16915","49150E7573E6CDAC1479955E29277EF3","4B15A0689026327D0E61F7A59B78AF9F","4B23403C9CBD2AE8DC0E4989805CBDD3","4BD381B217CC5995F43AAD5B670BF287","4C15F53B91D2C5C40CC41A0B7824E579","4CB9FDE3D4FD17631CC8538034E5D41B","4CE919F143FDC95C6F890C34B8B16821","4D8EF62121C26950EF0CC6482B0AB2BF","4DEC1AB4FEED84E4066EE4EEC51002DF","4EF16DA3CDB7E06C779AD749DF5ED161","500435AD2786B0006D2960176BCF44C2","50A7C5D2CDF80EFB1D452E6202DFB4F0","50DCE388351C1F29ECA963580016E8BA","520213FB313CD6CCD7F015F54AD3236E","5251536B565010F6D4B45AEF05E20FB8","52EF4BCA9CEBAF4DED70463114FAAA32","551CBA8F4F0CC5E7EE0C7077F0C9E1BF","552E76664F1B0F5AE10E3A1542FA690E","555C7469F5FAAA39157D8D1956AE05E9","559373348A041CA9CA7B70850894569D","55BE60883B1E4FFFA61E68C98CE2C586","55D9830CDADD7D6BBA2E7F0D98601EA6","55EAA4F906699109EF1BC1E9F88DED46","55F7D81CF48E9CC8740153C82F935DA9","572489146F36516BD0A5042D3C87B4B4","57ADE963D21C426A7583478836F27568","58C4E2844DA625159FF9A4D8AC0DD74D","58D0629E925E17E60F0DB4EE4CF9DE00","5910686EF3193C03AA8954713FF944DE","5B35CE991EE0D4201C0CDC9FDED9C3C7","5C75823FD11F899E8E204B1FD52170A4","5D0213B7C9D7BA937951583B598F9A67","5DEFE1AD882BD0447072B277A16617F0","5EE6A53BB972311627EADE8A25BEF4DE","5EFE463B63EC6C03E97AEE2BCC5E9A85","5F6C0BA517B34AFEBB726255CD6FDFA4","60B15CCB01470B4B01A7C5160550426A","60C9E68C81445320BAB823BEF56A0DA4","612C46200D27EB435D5C67782F6EEE47","6180C733B4D97BB48FF8E6E7548FF74F","618A1196C36D2B4B5BA229AC2D2B1553","61B505B3C43CFA2FD14C175D652D5795","6379EC8CC3858C8950E97D60E78F5044","63D60B169CF0BFE4269ACDBA90779FF9","6437FC94A2E8962371239559806E34A8","644E7733486CF08D9570E19198FF4872","64F3763A7F295DA88FD598C7758ECD50","658DCFD3FBD8D60CAECA5EC90293E20B","66E1EE51F59A639793F36438C1466040","66F8EBD8D2E3F105922F596B73692FDA","6800B6A6539E66FACA23CB3DDBC1D6FD","68349C4B575A22121BA59E71B9B11F58","68FA52376BBF0E1A0266D1056EADB3C5","69207B596A21842E39746A45A0321A60","69D2811A94DC99E84CED85B51EA1A672","6A016662D599327C08278C20A69D58DA","6BD3BC3F536C33113821BD80A53C5133","6C754EF3C340E0CB39C97960A49E7E2A","6CED8AD7B42CA01B1319990E4D3DF88B","6D8D841DBFC0AD71727C83A84A9E16C9","6E02A01731D75A2CB1739A48A0725179","6E23A6A07B47DCAF1AA7A0E71D9EF374","6EB524A7C8F1304A2A1643CB49D0D16F","70946C1F3D64D633DDE5190D07D60F28","7102FC0D1404D91329D10C707F6CDB98","7186A940616091366D084DB8848F88DB","718D57F246DFF49E1967CEFB9A58493B","7194A53B73ADE37EF1DF4A71C07812D8","7207042865982FB7CCA61F816D7A1197","7237B7863BC829BA15D1F4A90F935DAE","73E0B4E661626943CEB8CCC82E073013","75E4B2EA0D31713F7A7B32065A4FE034","768F8B4B7E7C89110AD9A6FDA41856AC","773B1D14CF80C0C13FD3B8D41DE4EE51","7865076893121C2EC9B27835F6FC50F7","79DD80D3B3CFD967F19581E3F208E792","79E78667C49F35399BAE974A75EF11D7","79F24574E11FE4C7AB008BF02C70802C","7A013D82DCDD470962C4A54A6CADB0EA","7A1DFB29822E6F6F13592F08B3166572","7A82CE53CB309D53F25B3A98A93A8E86","7B309E40573D3FB69B53E5CDABF4DE1B","7B9A729815C75F3DD4556262CCC0370D","7BA40C32ED08D85EFE93BE05DAB0537D","7BB347B770574ABAFF6FA61907B86911","7BFDA01B5535AA075BB9774A8737C6A2","7C4872BBAFC2A5916C7D3B4660A81FFF","7C4E415AEC54236380C2A445ACC71B52","7C91C0738CC7DBAEB3DB2C66C5F3BA3C","7D923FB907B08004A0CB8AC4A7698A93","7DB2F5378D45F6775C60EA7C6CE1A63D","7E3B01C97C852900AC4758C660EF5245","7EA6C9EB81B70CE0723D3AB4E5732B84","7F75BC8EC274D2CA8EF8BBF693DA23B1","7F840D096A71D17C87D6916A933E146A","8028085433F0BB87F58CCFE0A029FE0C","8095620D46880690748BE156E9656EC6","80DB3BDF52086218808FA95EF9D7AA2F","8160BA594AC9A94E85CA52D79D4029ED","8275D10F0DB4C6C0BC4C1BD9097E69C3","82E53C87329ECD9FD850C03D6DA95DD2","830FF898F13B6C4DBC2D473D7AD2F944","83E50C4A26BD3BA12396617B38623317","84DFB6495FBAEA34C06D6AF5025153EE","84F3141E854EF39FEB5ECFCF8712DDBF","875AB54C5EA24672A4C1E33517519139","879F36A3FB9E04B91E6BA07A2ACC6AFF","8812AAE1969442FE446222149B124867","891600619063EAA21BA816A13F99AB0A","8918CE311F5820CB137D99569D115F86","8AF3EC60598EDE6F4CD207CA7783C55D","8BD88D861FDA0FE5168DAE5DD4CF781E","8C4AF87BA1989BEBB82B4BECA31CEA6C","8CCCDB64C4805A6A56E58818441E16A6","8CDB7A56D3E31BBCAE97D7F4A2171C31","8CF251F30A665AD9D1ABDEB9C3280502","8D73CCDE66E31B016F2E1D76738D68FB","8D83AA4F25BBEFEE6C7D001F14673EF8","8D8EB193CC00DF393B0A2FFA7A6B4F77","8DAF974BCCE680509AB01D4E0F108B2C","8DF4949938C3F335C2FD025676923D16","8E9EBBC9CD51FE2A7B0B7CAAA509B56F","8ECC5CD7B13FD449A74A06F010B4860E","8ED3BFF2A69C391F885C9712C4461EB4","8F38DE12039B38C2E3376F27F0A27503","8F4F6D550ED01A8330CF1A66BEFE4FF4","8FAE0D17A1C2DBAEAE27C2CA6E61AC98","8FC6AA5DE66360542701E7CCE3A26B97","903D30B0D0ADA591174BBF048764F006","903E5277A71A486DD7D91DF30BC28A0A","90FCF546EE6CCC45484448C6E68818CE","91027235AF5D79C1147CE993C2A5048A","9139251CEAAF4723C52777EE259B49D3","91D08A592A86EDB1A527D22C3E19B47A","9426348A4885F5A740A1AABE67B99B86","9443C04F67EE57DFB96AAAED277B3D5E","94E42DCEE8084E0D21CD072068B61DA8","97A5038C2CA6F1F8B34466213CC95026","9870D9017B452C9DF2BDB5422CAAA352","98DE3C1E91C6ABC10ACFCE16A955E40C","99B0CAF7B5C24D07D80BCC72CEDDE527","9AB11E5EA41E32A7B92A15FC415B7C9E","9B23B5CF007BF415C4B4F3E9C6414415","9BEB7B9BE2A6A1F85738631F5DAB53BD","9BEE1F0287448714F4D56583C1EB6835","9C5CDDAEA5F4646B8AAF25DA8E8680B2","9D17FED6A31C49C352362A48EDD83B51","9D35ECD98219543F4E3C7DD8F4639740","9D7DF45E31DDA5185E22036175DEC5CF","9E1ACCCB7AD865C10F30D5DA823CB520","A0D5BAF4EA92669532F7AD683A1D138C","A148FD213F24EE6738BE08FA5B851281","A199DF8C9ECD5CB97F612BE9A4DE8C42","A3633C3A788AF175D1AD26E966BF5014","A3C6A16B31398AD31AA6DE1F0AB1930C","A55D6D1B007114F8636C0B48F2317FFB","A5F3AC3F9B510F26389F29A3493A34A0","A6C4A7D27BE9F0A2FF2CF2EF24E34CD9","A70B319BA9C38B7F15B036A8A175B3F8","A7AC28CC1FEC6C676AA775BD059CF647","A7CB0CD41DA24BD4F8320A59D80F1F1A","A868C681FD1619158FAA82F7FA9BC326","A8974805720397AFB6A185EF22F6EEB9","A9D0C041EBFC2E947EFEBE008B15B19B","AAC110921D37","AAD0611091T0","AAD101213QT7","AAG060713QK1","AB9DF4C83B05FC615C4DE10979594B51","ABA121025PZ0","ABA880701741","ABA960625AC7","AC9E5A2F738A1EC98499506DD675250E","ACA040206338","ACA160309F28","ACB81B9656A81BB3DC341304C376C302","ACC840521DU9","ACD2AC5415022D0BDBE737B1D116A566","ACD9A2524156CE9AB6EE5F2ED03DD023","ACE091020CF6","ACO080407868","ACO1603164V3","ACR110510UZ2","ACS140526SZ0","AD14C809CA75ED67F5F343DA5088719E","AD2621AC9B39DC60C5EB7C27DA223A67","AD298BE226963AED72908F371FDF4514","ADC2D359C459C6DF38196F9BDFD8B22C","ADI991022KX2","AE8DA04018001E602365BF7E50239A37","AEC0210031JA","AECO210031JA","AGD811217HS7","AGL980217T84","AGP060912NJ6","AGR160617H17","AGR920618218","AGR940215K92","AGU9403013XA","AHI080820U48","AIG060331NT4","AIM910425TR1","AIN900423SA2","AIPG11021439","ALB0601038C0","ALD8002224H1","ALI891106NH2","ALT031211CH0","AMA0804103U4","AMA110129442","AMA970212BC4","AMD1409244W5","AME831229C40","AMM0703276B6","ANA090810BF2","ANN041129G41","ANX940223JQ0","APA000426248","APC7405096L4","APD120608KM7","APG130313511","APJ170217F94","APM1605053QA","APP930427421","APP980302FZ6","APV940803PI2","ARA050622SA0","ARD091006KI5","ARR900308CT3","ARS1007211S6","ASA120611GKA","ASC951228IM0","ASG901109DP8","ASM080806U65","ASM151022RP3","ASP080527I25","AST930715AB8","ATG921231AP1","ATJ121129Q36","ATT010612HL5","AUN0812172P7","AVA930112UV8","AVC650311PJA","AVE120211QY8","AVI060306FF0","AVJ921117R72","AVL940903L70","AVS100517JT9","AVS8906308K5","AXT940727FP8","B0C2123C15A93646DE664CF542FF0CD9","B1168BA6744603164C1D759D3605C27C","B210B079952CAEF4362B94DBA19F72B9","B4A67EA1AC47A95722236B68FD657CE8","B4A78DC2E4490EAE2FA4874F5D1438FA","B4ECFBFFE81F6473F1DB81CFB32793B7","B5B66E88A1CD482D73D8414695729FC0","B7B76E81C1F3B1B3A95E26A43C61846D","B7BBA4907542B8DBF71861EE42B04A2A","B7C6459B261A35A0F337B286FD9511E0","BAY931022CL6","BB45B85722FE2692EB2AF40127CF39FC","BB4B965592AB0CAB42A11ABE7EA2E41A","BB635E7E5C6474CE30864970DB66A498","BBA5A6B6CAC12AB2773D2B91CBE26506","BC06DFCE6DD3F188F76122D155704BE6","BCA84D3C3591374049F2F49C9D81CF9B","BCF1DFA69A49BCA5C758B32B728E82F7","BCG1512147F0","BD3278C459A20EC18ED8E845F35BE3B4","BD70CEAB02ACEEF9365A72EBF23DA2B8","BDC109A709FEF95F3DF20D2220723E8F","BET040330HN3","BF346304B2C728105DB31B941F2255C3","BF50C7BFF2368068E6D13A9E3C2615B3","BFBB672D1A6D4DE1B3995C5A0BD1B6A9","BFE030305D39","BFF459F39A0AABA047712C31F7A7E567","BGA831024IY2","BIM011108DJ5","BIO060329TP5","BME920917PE2","BPU7901018D4","BSE0610276X3","BSM170614M29","BSU651106QU2","BTE980714SI5","C020151582B7F95B995FEE56E851FDA4","C058CA05CB8F1E09462CCEE9A0B145A2","C0733B0049C16B4278D12D5AD42A9797","C0D9929E0660B14579B8658A8C51B54D","C0EEC03AC12ED80B4D0989355457C899","C2A98658906580797D0E0DA2F291BC57","C3CF28C861352DCB639AFE47A7634DC2","C3D03B8E3992FFC727DEB2478E8C24EB","C435E7EB998D2485FCE5D5A9284EA1AC","C47983ED1EDCE4821D52B2057BACD765","C501CF26F5DBB2AEC07D101416C694F3","C58CBEDBCFA9604107E17497927B87D2","C5AF24C89DEEC6CD11103DDD60677438","C6ACBA362E029C272D04D73D4BD37C7E","C8EA2D475972537A8BA5E2C783CBC289","CAA130111IF1","CAC050202AR0","CAC130624BQ8","CAG090914CN9","CAG121027BI0","CAI880322193","CAL031230UL6","CAL080125P50","CAL1106243B1","CAM0102077V1","CAP0708281A2","CAT130304ACA","CB0015ED4395E299836AE8A1434F3F66","CBA890707MK0","CBBA1E35DF1F965239E86397F101DD32","CBE051028DV0","CBS0703015TA","CC02A3ADEA54BA2403B684F9455F205F","CC86D2BEF95F870F59F2CB71E53DC7F8","CCB1208066U1","CCE960607QH5","CCFF106F2D734D3DBF2EAD88B5C0E5CD","CCI040526EQ4","CCM850708SF7","CCO010402750","CCO820507BV4","CCS0308152M5","CCS1609072A9","CDC030702EF0","CDI090715JQ1","CDN960718D41","CDO150715TJ3","CDP040212748","CDR140321E70","CDU791008HY2","CDZ090828J73","CE10F72DE91A53FA8E03A0E1C1AF5653","CEI140214D57","CEL470228G64","CEN020207PF4","CEN070101DR7","CES130627SK6","CEX0705216N4","CF7C89DD2649CDE0046FAAFDFFCEBA3F","CFA1203283M6","CFE7DDDB3C7B446E2911A79522090E3E","CFS1301211E2","CGA071015IV4","CGA100616ER5","CGP011003IK6","CGV040914896","CHE041201L59","CIC8308165A4","CID770115B40","CIN0005021A8","CIS0208268G9","CIS030827AF4","CIS910103KE1","CJA061016ALA","CJA750104QE9","CLD0507145H6","CLE100819C97","CMA050117Q81","CMA8112148P3","CMC000222ER7","CME061103A95","CME1011259F6","CMF080114IG5","CMG090417IK4","CMO791029IV7","CMO8008189N6","CNA0803129S8","CNO990201249","COB1205072F4","COC801230RY7","COK1310228E0","COL021011H9A","COL8310209U8","COM0002088G1","CPA791010QF7","CPA840111CD7","CPB020110938","CPM070725EK1","CPM110719SG3","CPM961104EL2","CPM981203EA6","CPO160210AT6","CPP9004072F2","CPR0002283E5","CPR910401893","CPS040625NA1","CQC120327NJ2","CRE150423BF1","CRO010726GS8","CRY841203PJ6","CSC811023LT2","CSC9112107M1","CSI101105VC1","CSI870226NP0","CSO131209BR4","CSP130611PB4","CSU0504167J2","CTE841230UA7","CTU090506FP8","CUN820107GC7","CVA910402GI5","CVE120308PW6","CVS170118EB2","D0EAA8D66D311988D842223F702B1F1C","D10B435B65AF1B11AEECB46A6EDB7AE6","D112970AF8C92EBF06022CE2618BCA9F","D155579F92BFA10DBCA91C0A04D69D9F","D1821C52176176C6870281CF3D213B15","D19257F37A9B8C5828BD86FCD2F2A990","D1B4FE83E4BBBF22FD4B02BF85DAD3B5","D1D254981299DB50DC5E849254C5EFB3","D3E8A3856287829FDFC2A7F6D1E76C0D","D6045928C44BDA9E2380F89B330E1D9F","D760AB60F0D99C2F1179D67292A203A3","D78B005A8F34DDD5826BFA1E512A6EF7","D7CC10473FBC0F4730B32520BC82C2E0","D806E482A1B57997B9F9741950D5E72D","D825047B3A9804E615E0D2014997FECD","D99C15996ECD1FBABF305F9EDFA56A5F","DAC960820HV8","DAD140702UR5","DAE4AC084BEAB38CDE01AB5585B6F019","DBE59AB8A2442425ABF45118A70F513F","DC63A381EA5998AF01EFD6613DFC396A","DCC110114T35","DDA2070ABBEBDB7CC34A30BAEF84FCB9","DDD090623N13","DDG121221KR8","DDIO61205FG9","DDM840626PM2","DE1873D3B6F000ADC09E9098BA3C1342","DE1C5B37D7EE0E1FB54357DB7D8C70EB","DEL1404295R5","DET780215MV1","DF1062596A13E450B22D0FB15B29906E","DFR900521S8A","DGA830930787","DGU140526FV5","DIA970930QX8","DIC090226D77","DIG030409R54","DIS160819FS1","DJS900405G35","DLI931201MI9","DMA1510261Y2","DME100421FS8","DMM920422196","DPA130207R83","DPC010625E82","DPC030821CK5","DPR050714LF9","DSC150918NN0","DSP960705PB0","DSR160615RS0","DUL100129KS8","E02E0AF36AC083CA4CF53B0A281E2B3E","E03F83E20BCEEC881B9ED7673360C4D0","E04433DC6B4446E304E5936B13B082FD","E06BD9DEDAF62626863ABC3EBE0DE1C1","E0892598819BC77FC0E1029D466E75A0","E0DD8EB691F720693700285FE1749036","E101F1305E44134BE3EB4856C0465A99","E16FB87848EC2681D8688A5F0D90CC17","E1F808E8CF0F8198422891BDE9A12030","E37D8862D991291E991F311B2349A138","E760A22B06C71DEB1DF383315D893144","E8B91D3437E2904B44E863D8BDFF759B","E960CE555B2CE1E4909F490960E5D66E","E990C9C34F043971476760D90CBDF98E","EA62320CB81FF4FAA89A2450B541420F","EA7D5BED22FDA3C6E8F612C841576955","EAZ0311047B6","EB52B555383506156A71434159AD5CC4","EBE10774066C5CFA05C9CBB9C9A6A10A","EC17D03BF7A2E5670151E31A012BA60D","ECB5498F689B3629DD7138C0AE71098E","ECBD07BDF707E264902CDFF0BEE9DD29","ECEB6E762A8E3F850199B25EE63ABA75","ECF571E149E16F36199DC3CDC337B075","ECI980723DJ7","ECP0006303N8","ED528491E90F045103179534E41FA088","ED53985073F75138197B908DD4D366DB","EDA140724L70","EDI990805BV8","EE7DA591C73DFB0D27C017A014FF6BAE","EE815A01108C14ECF2EBAB1628DDAD22","EE9FCF72F1545539E609F0B3938EEF19","EEFD31F8D7C538D4E479902E71FEB3C0","EFC131108CM8","EFE22A4B5DE2349FB73D20BFD80341DD","EFE8908015L3","EFR870619KD1","EIA121120I31","EJA650902LJ6","EJU100422746","ELE9012281G2","EMA960131KX3","EME880309SK5","EME9408192F7","EME971111ST5","EMO170201DW4","ENM140728GJ9","ENV990331HF3","ERC070312G33","ERE070511PKA","ESA0912185R9","ESB060711KI3","ESB131112EB9","ESC1302271J9","ESC1511134P1","ESD0704115VA","ESS081202J37","ESZ0012146D7","ESZ860213AA2","ETO941021L12","EVG1312196I1","EXP070518DK0","EXT140120HV1","F15CE2CCF265D557B8B22E3B41DBE2DF","F2ABABC9DC653BD364D8681EA34A03E9","F2D0A69E8A6F80697A29F1EC1A035372","F31BA3C1563816E6CA5203C327AAA88F","F3435130DB5091D936FFBCAA52BE36E6","F58DB888F5DBE9B4FB1FF7A4A90B87E9","F604089C4420ED99F0BBBD5942730CF7","F62893C3765B8DA80B2F56CE6B9D8F52","F648B95F4FD4EFA5213703607BAED114","F784CAE3E38959C80F18C6026CC25866","F92209981E5F42440C8BAF548FF01A3C","F948C60405E03D403AC65FEE7710C2F7","FA2E0641B339F30A614182AD5C9C5D05","FA92AC5502269C6E529106745E7D8347","FAN120613JC6","FB6430348C8F27324F07067A675A916C","FBAAE2471AFCA0ABB71332A8D7F00D7F","FC210FA835EC77475C90DBCF666B83EB","FCA1703078G7","FD5486F0C49DF2D18AE7CB4E82F0298F","FD790DD8AE2461364B436CAAF1953827","FEA35E0C8784F7FCBE024882D85558D9","FER0812175E0","FIR7207197X7","FJC780315E91","FLA970702I50","FLZ900511HJ2","FME130701D3A","FOS110203ERA","FPA160210RL7","FPA8501153W0","FPP7907183V2","FPR091217E63","FQS101215CR4","FRI0006282Q0","FRI030228PX2","FSZ1408159B4","FVV970609M92","GAG070620PJ5","GAN791019G50","GAR090121RN2","GAS091005V83","GAV090305DD9","GAV9902135QA","GAY1401012Y5","GCC110922IQ0","GCC160126V71","GCE120822NY2","GCO050209ISA","GCO140303FS3","GCU900308IV0","GDE120918CW3","GDI080313HZ3","GEI060601T2A","GEM100720J44","GER170927MW1","GES140911NH7","GEX0104031T2","GEX010403IT2","GFF161201ED8","GFR1410271H2","GHH130412L70","GHN571231C19","GIG940902BM4","GIM810710D40","GIS170918QX8","GIT8406265M4","GIV970203LS1","GJU850604GB4","GKD150504RZ2","GKU1207074S7","GMI110113K71","GOD0612146JA","GPE120410BX0","GPG870312998","GPL860521FW8","GPS920618NI5","GPU8706251Q9","GRA9406213L3","GRH860930TA2","GRJ1405089AA","GSA110927GV7","GSA120511Q81","GSB010329JQ2","GSE050721DT4","GSM7803162C3","GSO130717NX9","GSO750224DH7","GSO780816KM1","GSO941021239","GSR170525N67","GSU010620SB9","GTE901219GK3","GUA070801IHA","GUB1111285S7","GYU1504176S1","HAR811207KX1","HDD131021922","HEL960223BT4","HIR820208UP1","HJO891013CC3","HMA990603KI7","HMP150216LZ7","HMS110412LP0","HSI831014EW3","IAC850626TC9","IAC8805117Z4","IACJ76104F47","IAT1310099C9","IBC000929D95","ICO020926PY0","ICP081208PS2","IDE111003TEA","IDE420423PU3","IEK080806T85","IFA8311252B4","IFC010802E36","IHE860812GR0","IHO120515LG0","IHV851216NG9","IIM020408QQ9","IIS1611165E4","IJD6008166N1","IJL841201P50","IMP170425TP3","IND3212193G8","INE860422JRA","IPA811214UR1","IPE050620JWA","IPP170714T96","IRC151203F8A","ISS470710CC2","ITA840625SP5","ITR0410194U2","IUS890616RH6","JES851114TY4","JNU140320QLA","JOC810515PV5","KCD920903G48","KCM810226DEA","KFO040609EA7","KKL901123VB1","KME940630DR2","LAG731013369","LAJ050914PA8","LAP860217H1A","LAP860217HIA","LAR110402CA4","LAU120619KL7","LCI900126EE7","LCP060825739","LCP821116GZ0","LCU831201EUA","LDD070706FW4","LEA0512097Q9","LEB160622J60","LET950101HD2","LFI020213PS6","LGO041105HM1","LGU811119M86","LIC950821M84","LIN050506QX4","LMP960625E88","LMS9401087T4","LNO8407307G2","LRE140204JE7","LUM110425Q22","MAJ151014E7A","MAL2809011H1","MAL940525JDA","MAL970403E66","MAN9511281F4","MAR9308174P1","MAR940516K16","MAS011002T66","MAU090310552","MAZ8111185X2","MCI1108236N2","MCP920803TV4","MCR920323LB7","MCS020326G8A","MDA150522Q27","MDE021203JH0","MDI931014D37","MER960302PD3","MESG630926E0","MET8908305M9","MFA840312BD6","MFE3410277SA","MFM030526RW7","MFU161117UN1","MGC120821CIA","MGU110124AF2","MGU1312031T6","MGU840223U79","MH5840626BI9","MHS840626BI9","MIL120908JD6","MIM0301297ZA","MIM070420EM3","MIN931015ES9","MIN9704153PA","MJN081127NC5","MMA071106IX7","MMD1812038QA","MME920427EM3","MME960821JHA","MMO820212US6","MNB060905M53","MNE0409226K9","MPO891004LW7","MRA080125257","MRE161026HB0","MSI100707BR7","MSO1204279Y9","MTS520412KT1","MTV760226G73","MVA020701SD3","MVA1408062D0","MVI150821SK3","MXT0810167P3","NAN060602PW9","NAV050204RE8","NCA000310FU3","NCA781025HP9","NEW9406037R6","NGT041122HA8","NSI991105182","NSO030325B42","NTO060127NP1","NUT1204124V4","OAI161214M17","OAS970520T8A","OCO020222FE5","OCO091110JMA","OCO801208ML3","OFI081006DV7","OHA0910165D4","OLE131213N16","OPC160616MW0","OSH890719LW2","OSP170710E8A","OXT890703JI3","P&G5609219R2","PAB150306BPA","PAC941125PQ9","PAE131031ML0","PAG150819C57","PAG951018JP5","PAL910812C34","PAM781201CW0","PAM960101E21","PAN921013AK7","PAN970411NF6","PAQ940812UM1","PAS150904DP5","PAU071004FL7","PBE8407047KA","PBP0601304WA","PBR9308303X2","PCD130306V49","PCH850906TM0","PCO000907NQ6","PCO101220FC5","PCO130506QI7","PCO931108626","PCO961015Q61","PCS981217IT3","PCZ070530CQ9","PDS080402H29","PEA0303203V5","PEF080731735","PEX051012GW2","PFM891014836","PFS011213PN3","PHA820319Q36","PHT120221949","PHU130522SL7","PIA1509149J7","PIB111125E90","PIK010111SH7","PIM810710R32","PLA820322FU9","PMA120725BK4","PMA130219BZ5","PMA871021410","PMA941003B92","PMC1604144E1","PME780907754","PME8411016W6","PME930802FG6","PMI770930L32","PMM0603021Y6","PMO960711EJ6","PMP8302195G5","PNL840516MM0","POL0204177E8","POL900418IF3","POL900418NF3","PON140930515","POV9905132D8","PPE1206088I3","PPI950922LYA","PPM7709209N7","PPM8310217F7","PRO1103017VA","PRO130131J16","PRO890802US3","PRO950227HW0","PSE891129GS1","PSO160905KQA","PSP0902165S4","PST080825LZ5","PST960515FM9","PSU010810258","PSU771107BD9","PSV990510775","PTO900402RV5","PTS940314M91","PVL9002209Z5","QEM040723GZ2","QGO960109UP4","QUA0402022D1","RAF9705021G0","RAL050909NJ1","RAS560314PK7","RCO130409AY5","REC040618SL6","REC141106MR7","RIN1104299B5","RNY9510248M8","ROCA621027A9","ROV730726UY0","RRC070125LI5","RSA990922PZ6","RSO980129NL0","RSS961209LP2","RTK890921M97","RUS910704ID8","RVE971128537","SAA090520EN4","SAB9407014V3","SAE940215S8A","SAF971223UK8","SAP161129URA","SAS921214C49","SAX130830TL0","SAZ000925N86","SBG971124PL2","SCA091005KL3","SCA960403LW9","SCL920128LU0","SCM091023TW3","SCO110208942","SCO1309114R0","SCO990701HT8","SCP840706HG0","SCT8411179Q4","SDC030220NK7","SEC100618QF2","SEC6803101N5","SEC9108274P0","SER1511108H9","SGA920820IKA","SGF110124NM3","SGP880517EJ7","SHN571001I66","SIE020425UJ7","SIM0605054T2","SIR860711V69","SIS811210H53","SMA130306BD4","SMA790517863","SMC960412UX0","SMM990318AM0","SMS040825N78","SMS170918184","SNA9210282T3","SNM010323EB5","SOA861008RH4","SON1309041XA","SON990511MI0","SPA810429PU2","SPP1012137J6","SPR870504UBA","SRG000907TN3","SRN000519Q69","SRP0810151T6","SRS061111IHA","SSA040831BS3","SSF111129C17","SSI970919E71","SSS060613JZ4","STM601103LX6","STN101109IP9","SUM8605304M6","SUM980903MG6","SVA171027PY1","SYA240610A57","TAS050315JV7","TAS091009FM7","TBC140214K48","TCA0407219T6","TCI770922C22","TCO150312TD0","TCR801129DI4","TCS040729E13","TDJ120302D79","TEC0609063E9","TEP060523US1","TER991021KS6","TIM880215TM7","TIN090211JC9","TIN120912Q93","TIN1610249K4","TLM050922MA5","TLU080610C81","TMA130510IK8","TMC840207K87","TMO8010285R4","TPC1208066U6","TPP061218GK5","TPV8202089Y7","TTA0702165A5","TTB860429BL5","TTO150522R12","UAG7806127I8","UAR131109B14","UCA071105143","UCD530225AI6","UEX061010HL7","UGR080806FF9","UME101208GA1","UME651115N48","UNI130409K61","UPN830920KC4","UTC110307PC6","UWI0905136J2","VAS110923N11","VCE151009I47","VCM0208074P2","VDE070131TS9","VDO030101596","VER970528EQ2","VGA101210JI9","VLE160118RA1","VME081003CA0","VQU040820K65","VRE640702H15","VSR151221UL2","VTE150306GD7","VTV911001NK3","VVP091222RF5","WAY8711019F1","ZEO991025GG8","ZUC100723VB8","\u00d1UU141013NP8"],"supplier_name":["GONTRAN MENDOZA VARGAS","MARIA OBDULIA PALMA FIERRO","VICTOR HUGO ORTEGA ZU\u00d1IGA","ANA LUZ GARCIA MONTERO","MOISES REYES HERNANDEZ","RUTH PATRICIA CASTILLO DE LA ROSA","JOSE ISABEL YA\u00d1EZ MERIDA","CARLOS OVIDIO VILLAREAL GONZALEZ","CARLOS HERNANDEZ ZARATE","J. CRUZ ARANDA TORREZ","PAULO CESAR VEGA DE LA CRUZ","DIEGO SOSA CANTILLO","CARLOS HORACIO VASQUEZ RAMIREZ ","FRANCISCO JAVIER MARTIN RODRIGUEZ","GRACIELA ANGELICA TOPETE DAVILA","RAQUEL FLORES CHAVEZ","JOS\u00c9 LUIS GONZ\u00c1LEZ MORENO","ERNESTO DELFINO PORRAS RODRIGUEZ","JAQUELINE ALEJANDRA GOMEZ BASTIDA","TIMOTEO HERNANDEZ ARTEAGA","ALEJANDRO ENRIQUEZ LARRONDO","RICARDO ANTONIO VILLARREAL SALAZAR","LIZETT RAQUEL AGUILAR ZARAGOZA","RODRIGO DE LUCAS GONZALEZ","JOSE ARTURO GARCIA ROSAS","OSCAR GARCIA FERNANDEZ","BRENDA LUCRECIA ALVAREZ RODRIGUEZ","SANDRA MARGARITA SIFUENTES JAQUEZ","JULIO CESAR RAMIREZ SANDOVAL","ERNESTO RIZO GAVI\u00d1O","CLAUDIA GUADALUPE ESQUIVEL GUADARRAMA","ERNESTO LARA TOVAR","PROMOTORA Y COMERCIALIZADORA DE OCCIDENTE, S.A. DE C.V.","RAQUEL LOPEZ ULLOA","CARLOS ARTURO MU\u00d1OZ PEREZ ","FREDY QUEVEDO MENA","AMELIA HERNANDEZ UGALDE","UNIFORMES MAKAP, S.A. DE C.V.","CARLOS ALBERTO HERRERA DE LEON","VIOLETA ZURITA AGUIRRE","LUIS ANGEL CRUZ ZAMORA","HIPOLITO MENDEZ","BLANCA ROSA ROJAS RAMIREZ","BENITO DELGADO ALVAREZ","MARIA DE LOS ANGELES CORTES SALDIVAR","JOSE RAFAEL ROSAS VALADEZ","JOSE FLORENTINO DORANTES PASOS","SAMUEL GARCIA PINEDO","MIGUEL BLANCA RAMIREZ","JORGE ZARZA RAMIREZ","ERNESTINA ALICIA OLVERA OLVERA","JESUS EDUARDO MILLAN LOPEZ","SAUL MENDOZA AGUIRRE","KATIA ELIZABETH ARREOLA GARCIA","JORGE ADAME BURGOS","HORI ABDIEL DOMINGUEZ LOPEZ","ENRIQUE SANCHEZ VASQUEZ","MAURICIO GUTIERREZ MATIAS","LIBIA TORRES PAREDES","SURI SADAIM HERNANDEZ MORALES","SALVADOR ORONA ROJAS","ENRIQUE SEGURA BAHENA","ABRAHAM MORALES BECERRA","ERNESTO DIAZ ALARCON","JOSAFAT SANCHEZ VELAZQUEZ","JOSE ARMANDO YAM ALONZO","FABIO ANTONIO ARANDA SOSA","MARICELA CHAVEZ OCHOA","EDGAR ALEJANDRO MERAZ RAMIREZ","SANDRA ESTEFANI FUENTES RODRIGUEZ","JOSE LUIS LARA AGUILAR","MARIA VICTORIA LOPEZ ALVAREZ","MISAEL ALONSO HERNANDEZ ARIAS","VIRIDIANA CEJA PARAMO","CESAR ARMANDO GAMBOA CABALLERO","MOLINO CENTRAL SA DE CV\t","VICTOR OSWALDO VAZQUEZ TOLEDO","JOSE FELIX ARREOLA ALEMAN","VICTOR OSCAR PEREZ MEDINA","GERARDO PRAXITELES OROPEZA CAMARA","JORGE LUIS SALGADO RODRIGUEZ","COMERCIAL EL MOLINO AZTECA, S.A. DE C.V","LUIS FERNANDO HERN\u00c1NDEZ CARRILLO","SERGIO ROSAS VENEGAS","ALDO CESAR GUERRERO AVALOS","YADIRA GUADALUPE VALLE SANTIBA\u00d1EZ","JOSE FELIZ ARREOLA PACHECO","ENRIQUE SANCHEZ GARCIA","CRISTIAN ARTURO RODRIGUEZ VAZQUEZ","INDUSTRIAS JLC, S.A. DE C.V.","MA. MARIBEL VILLA SOTO","GENESIS ALATIEL GOMEZ REALPOZO","IVAN VLADIMIR VILLARREAL TAFOLLA","GRUPO CHASMA, S.A. DE C.V.","ENRIQUE HERNANDEZ MENDOZA","JOSE CONTRERAS ELIAS","TANIA ROCIO SEHUE LIMA ","ROBERTO RAMIREZ GUZMAN","ADALBERTO NICOLAS LIZARRAGA OSUNA","TERESA ARMANDINA PULGARINI BARRAZA","JOSE ANTONIO GONZALEZ MORENO","JUVENTINO CEDILLO GONZALEZ","JORGE IVAN GATICA SOTELO","GERARDO CAMACHO ROMAN","MARTIN ISLAS RAMOS","JUANA CECILIA VALDERRAMA MELO","JUAN GALINDO GARRIDO","FRANCISCO JAVIER RODRIGUEZ VALVERDE","OFELIA JANET SANDOVAL CAMBEROS","ANA LIBIA LOPEZ MENESES","EDUVIGES CAZAREZ PADILLA","CARLOS ALEJANDRO TORRES VARGAS","MARIA ANTONIA GONZALEZ SANCHEZ","MANUEL OMAR GUILLEN DOMINGUEZ","FRANCISCO SANTANA NARVAEZ","LUIS MANUEL GRANADO CRUZ","GONZALO ACOSTA VILLALOBOS","BARBARA CARRETE RINCON","MA. CARMEN NAVARRO ARROYO","ABEL DE PAZ DIANA","PATRICIA GUTIERREZ HERRERA","TERESA DE JESUS DUE\u00d1ES ROSALES","MARCELA ALDAPE ALONSO","ANGEL TOMAS ALVAREZ OLIVAS","ALEJANDRO ACOSTA DIAZ DE LEON","MARTIN RAFAEL DUARTE CERVERA","AMKAR NOE SANDOVAL CAMU","ESTEBAN GARC\u00cdA RODR\u00cdGUEZ","MICHEL SOLORZANO SOL","LUIS ALFONSO RIVERO DE DIOS","LUIS ALFONSO GAMBOA PUERTO","ARON GARCIA HERNANDEZ","NORMA MACARIA HERRERA DIAZ","JOSE JUAN GUERRERO PLASENCIA","MATERIALES PARA LA VIVIENDA SOCIAL MAVISSA, S.A. DE C.V..","BENITO RAMIREZ CARBAJAL","PRODUCTOS Y SERVICIOS CAPITULARE, S.A. DE C.V.","ANGEL ZARATE CRUZ","GUSTAVO GARCIA BOGARIN","JORGE DOMINGUEZ PINTO","ELI ROBOAM PE\u00d1A FLORES","JUAN MARTIN NAVA RODRIGUEZ","PAULINA ORANTES ESPA\u00d1A","TEOFILO CUENCA GIL","ALFREDO GARCIA RAMIREZ","HECTOR MANUEL LUNA CORTES","JUANA CAROLINA GALINDO MU\u00d1OZ","JUAN GUADALUPE FIGUEROA MIRAMONTES","HERMENEGILDO LOPEZ ARMENTA","JONNATHAN GONZALEZ MENDEZ","CRISTHIAN FLORES ROBLES","GILDARDO ADOLFO JIMENEZ PEREZ","MIGUEL MEDINA VALENCIA","PATRICIA ISABEL FRIAS MENDEZ","CESAR ALFREDO BADILLA PALAFOX","LIZVET ANGELITA VELARDE GARZON","RAUL ISLAS RAMOS","JUAN FERNANDO DAUTT REYES","JESUS BOCANEGRA PUGA","CARLOS RENE ORONA TERRAZAS","BRENDA JANETT ROSAS HERNANDEZ","MARIA GUADALUPE REYES HERNANDEZ","HERMELINDA DE LOS SANTOS VALERIO","DAVID FRANCISCO LUCIANO GOMEZ BARRIENTOS","HUGO NAVA JUAREZ","MARIA VIRIDIANA VAZQUEZ VELAZCO","J. INES DIMAS DIAZ","NADYA ELIZABETH TRASVI\u00d1A GONZALEZ","VIANNEY ANAHI MORALES TORRES","ARTURO RUIZ PEREZ","ARELY CAROLINA AGUI\u00d1AGA NAVA","BIMBO, S.A. DE C.V.","SANTOS MARTIN ISLAS PEREZ ","HECTOR MANUEL HERNANDEZ BRIONES","LAURA LIZETH MOGOLLON VILLALOBOS ","MIGUEL OBED PAYAN CHAPARRO","SOCORRO OUEILHE CABANET","INES LORENA PARRA MIRAMONTES","FROYLAN CAZARES VILLASE\u00d1OR","JOSE DAVID NAH SONG","RODRIGO ULLOA MERCADO","JAIME SANTOYO MEZA","JOSE MELESIO LOPEZ CORDERO","MARTHA EMERIA BARBOSA GARCIA","JONATHAN ARIEL ZAMORA DE LOJO","DIEGO AGUILERA CAMARILLO","CRIEL SALVADOR ABREGO MARTINEZ","DAVID ALEJANDRO BRICE\u00d1O PENICHE","PEDRO LOPEZ TORRES","JUAN LUIS LEYVA LOYA","ISIDRO GUADALUPE GUERRA CARAVEO","RICARDO LINARES ZAVALA","SANTOS MARTIN ISLAS PEREZ","NOHEMI VAZQUEZ LORES","RUBEN DARIO ZAMARRIPA CASTORENA","DARINEL JIMENEZ HERNANDEZ","MYRNA ARACELI ESCOBEDO CASTILLO","MARIA DE JESUS MAYNEZ VILLALOBOS","COLGATE PALMOLIVE, S.A DE C.V.","JUAN JOSE HERRERA RODRIGUEZ","OMAR GALLARDO NOLASCO","CYNTHIA ARACELLY DUARTE IC","FRANCISCO JOSE REYES GOMEZ","JOSE MANUEL ALVARADO MONTEON","FEDERICO LLAMAS CEBALLOS","\u00c1LVARO GRANADOS CONTRERAS","VALERIA REYES REYES","JUAN SANCHEZ SANCHEZ","MARCAS NESTLE SA DE CV","OSCAR HERNANDEZ RAMIREZ","JOSE FRANCISCO DURAN CAN","DELHI DEL CARMEN CABRERA CARAVEO","ZEFERINO CHAVIRA GARCIA","ERICK ALCANTAR CUEVAS","NARCISO HERNANDEZ SANCHEZ","MA. DOLORES RUIZ HERNANDEZ","CESAR MARBAN AMARO","CARLOS ALBERTO BRAMBILA ESPINOZA","OLIMPIA HERNANDEZ ORDU\u00d1A","OSCAR JOSEPH MATOS CANUL","MARIA CONCEPCION BARRERA GUERRA","RODRIGUEZ TOLOSA Y ASOCIADOS, S. EN C. S. DE C.V.","JOSE MANUEL HERNANDEZ NORIEGA ","ALBERTO RODRIGUEZ TELLEZ","ADRIANA VALENCIA NAVARRO","FRANCISCO JAVIER GARCIA FLORES","MANCERA MENDOZA HECTOR JAVIER","BENJAMIN ARTURO PEREZ Y PEREZ","EDGAR GALLEGOS ALCALA","MARIA FERNANDA PEREZ CERVANTES","ARTURO EDGARDO GONZALEZ CORONEL","JAIME LOPEZ OCHOA","MANUEL JESUS MELENDEZ COVIAN","ANTONIO DIAZ JIMENEZ","OLGA CABRERA OROPEZA","MARIA HILDA MIRANDA NAVA","MARCO ANTONIO CEJA VILLA","ERNESTO ALBERTO GUERRA LUIS","CARLOS MENDOZA PADILLA","MAT\u00cdAS S\u00c1NCHEZ CABRERA","JOSE DE JESUS CELEDON TOPETE","ARIANA YARABI MALDONADO ROSAS","MARIA ESTHELA COBOS BARRON","EMILIANO AMED ANZUETO VAZQUEZ","ERIKA MIRIAM TERAN GARCIA","FERNANDO MIGUEL SIBAJA","SILVIA ARMIDA PAYAN CHAPARRO","DAVID QUEZADA AVILA","NOEMI CARRERA BRETON","KIMBERLIN ESPARZA RODRIGUEZ","KATIA QUIROZ RODRIGUEZ","MADEL FRANCISCA LUGO","GABRIELA SANCHEZ GARCIA","RAMONA MALDONADO HERNANDEZ","OSVALDO ADAN AGUILAR REYNOSO","ANA MARIA RUEDA ALONSO","JOSE ANTONIO GONZALEZ OLVERA","LEOPOLDO BECERRA CAZARES","ENRIQUE BARREDA AGUIRRE","JUAN GERARDO MAZON DIAZ","RAUL PONCE WALLE","JUAN ARMANDO SANCHEZ ARCHUNDIA","JOSE CARLOS ANZORENA HUAPE","MIGUEL ANGEL GUZMAN GONZALEZ","JORGE LUIS VILLARREAL VILLARREAL","MIGUEL ANGEL MONTA\u00d1O RAMIREZ","IRMA LOZANO RAMOS","FAUSTO AVILES MURRIETA","JOSE PRISCO DE LERMA FERRETIZ","ABACOMEX ABASTECEDORA COMERCIAL MEXIQUENSE SA DE CV","ADER AGENTE DE SEGUROS Y DE FIANZAS, S.A. DE C.V.","ADMEX ACCION Y DESARROLLO SOCIAL AC","AGENCIA ADUANAL GUILLERMO VIDALES SC","FLOR RUIZ LEYVA","ABA-MEXA SA DE CV","AGROINDUSTRIA BROCA Y ABREU SA DE CV","ARROCERA DEL BAJIO, S.A. DE C.V.","RICARDO GARCIA TRUJILLO","ACH FOODS MEXICO, S. DE R.L. DE C.V.","ACOPIADORA COMERCIAL Y AGROINDUSTRIAL, S.A. DE C.V.","OMAR PIMENTEL GARCIA","ABAST. DE CARNE LOS CORRALES, S.A. DE C.V.","OSWALDO MANZANO MONTERO","JAIME ALONSO MENDEZ CORRAL","ALCOSE DEL CENTRO SA DE CV","AMX CONTENIDO SA DE CV","AGFZ CONSULTORES, S.C.","ADMINISTRADORA COMERCIAL RICE SA DE CV","APORTELA CONSTRUCCION Y SERVICIOS ASOCIADOS SA DE CV","JULIO CESAR FLETES ORTIZ","RODOLFO ALVAREZ SANCHEZ","SERGIO HOROWICH GAMBOA","GRUPO COMERCIAL DALAN, S.A. DE C.V.","ABASTOS Y DISTRIBUCIONES INSTITUCIONALES SA DE CV","GLADYS SONIA MURILLO CASTELLANOS","ASOCIACION DE ESTIBADORES  DE CHIHUAHUA A.C ","ASOCIACION DE ESTIBADORES DE CHIHUAHUA AC","ACEITES GRASAS Y DERIVADOS, S.A. DE C.V.","ABASTO GLOBAL, S.A. DE C.V.","ALMACEN DE GRANOS DE LA PENINSULA SA DE CV","AGRUZA, S.P.R. DE R.L. DE C.V.","AGROGEN SA DE CV","AGROACAPULCO SA DE CV","AGUAZUL SA DE CV","AUTOTRANSPORTES HIBE, S.A. DE C.V.","AGRO INDUSTRIAS GUERRERO AZTECA, S.A. DE C.V.","AUTOTRANSPORTES I MEX T SA DE CV","AGROINDUSTRIAS INTEGRADAS DEL NORTE, S.A. DE C.V.","GUILLERMO ARIAS PADRON","ALBAOSA, S.A. DE C.V.","ALDILA SA DE CV ","CON ALIMENTOS, S.A. DE C.V.","ALTYA","AGROPECUARIA LAS MARAVILLAS SPR DE RL","ABASTOS MAG, S.A. DE C.V.","ABASTECEDORA MEXICO-AMERICA, S.A. DE C.V.","ALTA MECANICA DIESEL DEL SUR SA DE CV","AGENCIAS MERCANTILES SA DE CV","ALCOHOLES Y MELAZAS DE MEXICO SA DE CV","AUTOELECTRICA DEL NAYAR S. DE R.L. DE C.V.","AGRONEGOCIOS DEL NORTE, S.P.R. DE R.L.","ALEN DEL NORTE SA DE CV","ASTRAL DEL PACIFICO SA DE CV","ACEITES Y PROTEINAS EL CALVARIO, S.A. DE C.V.","ADMINISTRADORA DE PUBLICIDAD DIGITAL SA DE CV","A&A PROFESSIONAL GROUPS & MEETINGS SA DE CV","AUTO PARTES JISA, S.A. DE C.V.","AUTOBUSES PRIME DE MEXICO S DE RL DE CV","AGUA PURIFICADA LA PE\u00d1ITA SA DE CV","AGRO PROVEEDORA DEL PACIFICO, S.A. DE C.V.","AGUA PURIFICADA LOS VOLCANES SA DE CV","LAS ARACELIS, S.P.R. DE R.L.","ARDIVAIN SA DE CV","COMPANIA ALIMENTICIA RIVERA ROMO, S.A. DE C.V.","EL ARABE REFACCIONES Y SUSPENSIONES SA DE CV","ACTIVOS Y SOLUCIONES ANRO, S.A. DE C.V.","ALMACENADORA SUR SA DE CV ORGANIZACION AUXILIAR DEL CREDITO","ALCOHOLES SAN GABRIEL, S.A. DE C.V.","AGRO SERVICIOS DE MIGUEL AUZA, S.P.R. DE R.L. DE C.V.","AGROPRODUCTOS SELECTOS LA MESA, S.A. DE C.V.","AGRUPACION DE SEGURIDAD PRIVADA PATRIMONIAL SA DE CV","ALIANZA SINDICAL DE TRABAJADORES, MANIOBRISTAS, DESCARGADORES Y ACARREADORES DE CARGA EN GENERAL, SIMILARES Y CONEXOS DEL MUNICIPIO DEL CENTRO, TABASCO","AUTOBUSES DE TURISMO GOLDEN TRAVELER, S.A. DE C.V.","AGRO TECNOLOGIAS DE JALISCO S DE PR DE RL","ABC TOURS Y TRAVELS S.A DE C.V.","ARMY UNIFORMES SA DE CV","ALMACENES VACA, S.A. DE C.V.","AGENCIA DE VIAJES CARMEN, S. DE R. L. DE C.V.","AGRICOLA EL VEINTE, S.P.R. DE R.L. DE C.V","AVIGM ","AGENCIA DE VIAJES JALIETZA SA DE CV","AGENCIA DE VIAJES LEONARWILL SA DE CV","ADMINISTRACION VIRTUAL DEL SERVICIO DE LIMPIEZA SA DE CV","ALIMENTOS Y VIVERES SAN RAFAEL SA DE CV","AXTEL S A B DE C V","ABDON ABEL HERN\u00c1NDEZ OLVERA","CLAUDIA GARCIA PINEDA","BLANCA ESTELA LOPEZ COVARRUBIAS","ANTONIO FERNANDO NAVARRO RODRIGUEZ","MARCO ANTONIO ROBLES PI\u00d1A","NEMECIO CARLOS VASQUEZ VASQUEZ ","MANUEL GUILLEN BUSTAMANTE","PATRICIA NI\u00d1O GARCIA","MARCIAL HINOJOSA HINOJOSA","OMAR RAMIREZ FLORES","BAYGAM, S.A. DE C.V.","NOE OCHOA PE\u00d1A","EZEQUIEL MONTOYA RAMIREZ","BLANCA ESTELA LUNA RAMIREZ","CAROLINA ACOSTA JIMENEZ","JOSE DE JESUS GOMEZ LOZANO","OMAR BADILLO GUERRERO","ALVARO GRANADOS CONTRERAS","BERSER CONDIMENTOS GOURMET, S.A. DE C.V.","SERGIO GARCIA ALMARAZ","HECTOR PLANTILLAS SANCHEZ","CATARINO LEYVA CORONADO ","BETONE, S.A. DE C.V. ","desarrollo y distribucion de empaque potosinos, s.a. de c.v.","CLARIVEL JUAREZ CABRERA","LETICIA ERIDANI CASTA\u00d1UELA AGUIRRE","BAJA FERRIES, S.A DE C.V","MARIA DEL ROSARIO GARCIA OROZCO","BODEGA DE GRANOS EL ALAZAN Y EL ROCIO SA DE CV","BIMBO SA DE CV","BIOKLIN SA DE CV","BELLOTA MEXICO,S.A. DE C.V.","BEBIDAS PURIFICADAS, S.R.L. DE C.V.","BRICSAN SERVICIOS SA DE CV","BEBIDAS SALUDABLES MODELO S.A DE C.V.","Blanqueadores superiores, S.S.","BUSCEFALOS TURISMOS EJECUTIVOS S.A. DE C.V.","MARIA EUGENIA CISNEROS JIMENEZ","RAUL ACEVEDO ALCOCER","JAIME GONZALEZ VARGAS ","PRODUCTOS MEZA, S.A. DE C.V.","SANDRA PEDRAZA ESQUIVEL","COMERCIAL ROCHE, S.A. DE C.V.","BLANCA AURORA CAMACHO HERNANDEZ","ANGELINA CORTES MARIN","FIDEL HERNANDEZ MEZA","AMADO CORREA HERNANDEZ","AUTOBUSES PRIME DE MEXICO, S. DE R. L. DE C. V.","MIGUEL AGUSTIN DIAZ QUINTANA","ELIZABETH TORRES ROSAS","ARACELI MENDOZA AQUINO","MARLENY DIAZ REGALADO","COMERCIALIZADORA AGRICOLA ARLEEM, S. DE R.L. DE C.V.","COMERCIALIZADORA AGROPECUARIA DE CUAUHTEMOC SPR DE RL DE CV","CONSTRUCTORA ACEPECA SA DE CV","EL CAMPO AGROPECUARIA, S.P.R. DE R.L.","CLASE AGROINDUSTRIAL, S.A. DE C.V.","COMUNIDAD AGRARIA DE IXTLAN DE JUAREZ OAX","CAMPI ALIMENTOS SA DE CV","CONSTRUCTORA ALNOISA SA DE CV","C & L FUSION DE MEDIOS, S.A. DE C.V.","CENTRO DE AGRONEGOCIOS LAS MARAVILLAS, S.P.R. DE R.L.","CAPROYDES SC","CATERINGOYA SA DE CV","LUIS IVAN JACINTO LOPEZ","COMERCIAL BAEZ, S.A. DE C.V.","GUILLERMO VIERA LARES","CAFE BERSA S DE RL DE CV","COMERCIALIZADORA, BANQUETES Y SERVICIOS RICO SA DE CV","EMILIO HERNANDEZ ARAUJO","GUILLERMO CARRANZA TORRONTEGUI","COMERCIALIZADORA CODE BLUE SA DE CV","CAMIONERA DEL CENTRO","JESUS FLORES RIOS","C5 S. DE R.L. DE C.V.","CORPORACION COSMETICA MEXICANA SA DE CV","COPAMEX CORRUGADOS SA DE CV","CONSERVAS LA COSTENA, S.A. DE C.V.","COMERCIALIZADORA COMPUTEL DEL SURESTE","CORPORATIVO EN COMBUSTIBLES Y SERVICIOS DE DURANGO, S.A.P.I. DE C.V.","COMERCIAL DOS COSTAS, S.A. DE C.V.","CUETARA DISTRIBUCION, S.A. DE C.V.","COMERCIAL DINAMICA NACIONAL SA DE CV","COMERCIALIZADORA DONCACAHUATO S DE RL DE CV","CENTRO DIESEL PROFESIONAL SA DE CV","COMERCIALIZADORA Y DISTRIBUIDORA REVESA, S.A. DE C.V.","CAMIONERA DE DURANGO SA DE CV","DOLCE ZUCCERO SA DE CV","ARCADIO MEDINA GARAY","CONSORCIO EMPRESARIAL INTERTAMPS S DE RL DE CV","COMERCIALIZADORA ELORO, S.A.","CENACCE SC","COMPA\u00d1IA LA CENTRAL, S.A. DE C.V.","CAFES ESPECIALIZADOS Y SUSTENTABLES DEL SURESTE SA DE CV","COMERCIALIZADORA EXDECAF, S.A. DE C.V.","MARIA DE JESUS MAYNEZ VILLALOBOS ","COMERCIALIZADORA DE FRIJOL EL AGUANAVAL SA DE CV","MA. DEL ROCIO ATILANO GARCIA","CORPORATIVO FRANCO SERVICIOS INTEGRALES Y PROFESIONALES SA DE CV","CORPORATIVO GAPP SA DE CV","CONSORCIO GAVA SA DE CV","COMERCIALIZADORA DE GRANOS PATRON, S.A. DE C.V.","COMERCIALIZADORA DE GRANOS DEL VALLE DE POANAS, S.A. DE C.V.","COMPANIA COMERCIAL HERDEZ, S.A. DE C.V.","CICOVISA SA DE CV ","CHOCOLATE IDEAL SA DE CV","CORAL INTERNACIONAL, S.A. DE C.V.","CLIMAS E INGENIERIA DEL SURESTE SA DE CV","COMERCIALIZADORA E IMPORTADORA DEL SOL, S.A. DE C.V.","COMERCIALIZADORA ISABEL SA DE CV","CAMIONERA DE JALISCO SA DE CV","CHOCOLATERIA JALISCIENSE, S.A. DE C.V.","COMERCIALIZADORA DE LACTEOS Y DERIVADOS, S.A. DE C.V","CENTRO LOGISTICO ESTRELLA, S.A. DE C.V.","COMERCIALIZADORA MAYORISTA","CAFE EL MARINO SA DE CV","COMERCIALIZADORA MAYORISTA DEL CENTRO SA DE CV","COMERCIALIZADORA DE MEDIOS ESCRITOS SA DE CV","COMERCIALIZADORA MEXICENTER, S.A. DE C.V.","COMERCIALIZADORA MEXICO FRESCO, S.A. DE C.V.","COMERCIALIZADORA MAYORISTA DEL GOLFO SA DE CV","CENTRAL MOTZORONGO SA DE CV","CHOCOLATERA MOCTEZUMA SA DE CV","Comercializadora Naremo, S.A. deC.V.","CAMIONES DEL NOROESTE","COBDEZ, S.A. DE C.V.","COMERCIALIZADORA DE OCCIDENTE, S.A. DE C.V.","COMERCIALIZADORA OKIMAR, S. DE R.L.M.I.","CASA OLOCCO DE LIMA SA DE CV","COLAP SA DE CV","COMUNICALO SA DE CV","CAMIONERA DEL PACIFICO, S.A. DE C.V.","CAFE DEL PACIFICO SAPI DE CV","COMERCIALIZADORA DE PRODUCTOS BASICOS GON FER, S.A. DE C.V.","C P M MEDIOS SA DE CV","COMERCIALIZADORA PEPSICO MEXICO, S. DE R.L. DE C.V.","CLIMAS Y PROYECTOS DE MEXICO SA DE CV ","C P M PUBLICIDAD SA DE CV","CAI DEL PONIENTE, S.A. DE C.V.","CAJEME PRODUCTOS PECUARIOS SA DE CV","DEL CAMPO PRODUCTOS, S.P.R. DE R.L. DE C.V.","COMERCIALIZADORA PROVINCIANA, S.A. DE C.V.","CEREALES Y PASTAS, S.A. DE C.V.","CONSORCIO QUIMICO C+C SA DE CV","COMERCIALIZADORA REALZA SA DE CV","COMERCIAL ROCHE SA DE CV","CRYM SA DE CV","CENTRAL DE SERVICIOS DE CARGA DE NUEVO LEON, S.A. DE C.V.","CORPORATIVO SURESTE COMERCIAL SA DE CV","RS CORPORATIVO DE SERVICIOS EMPRESARIALES SA DE CV","CAFES DE LA SIERRA SA DE CV","CAVE SOLUTIONS SA DE CV","CONTADURIA SOTO PRIETO Y CIA SC","COMERCIALIZADORA EL SURENO, S.A. DE C.V.","CAFE TOSTADO DE EXPORTACION, S.A. DE C.V.","COMERCIALIZADORA TUNONI, S.A. DE C.V.","COMERCIOS UNIDOS SA DE CV","CASANOVA VALLEJO SA DE CV","COMERCIALIZADORA VECEC SA DE CV","CONTACTO VISUAL STANDS & CUSTOM, S. DE R.L. DE C.V.","ARNULFO CARDENAS CUEVAS","JAZMIN ALEJANDRA IBARRA OSORIO","YOLANDA FRANCISCA ZEPEDA ARJONA","AMERICA MARIELA PARTIDA VILLA","ROSY NELLY ESCALANTE SERNA","PABLO REYES VELEZ","IRENE GANDARILLA HERRERA","STEPHANIE ASENETH ARRIAGA LOYOLA","OROZCO PULIDO CARLOS EUGENIO","YARID MAURICIO CHRISTFIELD LUGO","OSCAR DANIEL VAZQUEZ FERNANDEZ","JORGE ANTONIO SORIANO CHAVEZ","BLANCA ISABEL MARTINEZ MARTINEZ","FRANCISCO ARELLANO CUEVAS","JUAN RAMON CARDENAS SALAZAR","ADRIAN GONZALEZ CHAPARRO","DISTRIBUIDORA DE AUTOS Y CAMIONES DE ZAMORA SA DE CV","DISTRIBUIDORA ADHIPSA SA DE CV","VICTOR HUGO GARCIA ALVIRDE","CHAVEZ POMBO OSCAR","CLARO ALBITER REBOLLAR","DCCSUR SA DE CV","MARIA ASUNCION ORTEGA MOLINA","DESARROLLO Y DISTRIBUCION DE EMPAQUES POTOSINOS, S.A. DE C.V.","DISTRIBUIDORA DON GUSTAVO, S.A. DE C.V","DESARROLLO DE INVESTIGACIONES INGENIERIA Y CONTROL AMBIENTAL S.A. DE C.V","DEMOS DESARROLLO DE MEDIOS SA DE CV","MARIA DE LOS ANGELES HERNANDEZ CHAVEZ","J. CANDELARIO MENDOZA ARTEAGA","DELIHEI S. DE R.L. DE C.V.","DETERSOL SA DE CV","JOAQUIN SALAZAR GARAY","DISTRIBUIDOR EL FROMAR SA DE CV","DISTRIBUIDORA GARDI SA DE CV","DISTRIBUIDORA GUCASA, S.A. DE C.V.","DIAGNOQUIM, S.A DE C.V.","DIBUJO INGENIERIA COMPUTO CONSUMIBLES Y PAPELERIA SA DE CV","DIGRAVA SA DE CV","LAS DELICIAS DE ISABELLA SA DE CV","DETERGENTES Y JABONES SASIL, S.A.P.I. DE C.V.","DISTRIBUIDORA LIVERPOOL,S.A. DE C.V.","DISTRIBUIDORA MEXICANA AGRONOMICA, S.A. DE C.V.","DIPROVIC DE MEXICO S DE RL DE CV","D M MEXICANA SA DE CV","DELTA PATROL S DE RL DE CV","DISTRIBUIDORA DE PANALES DE CULIACAN, S.A. DE C.V.","DISPLACH S DE RL","DISTRIBUIDORA PROESA SA DE CV","DIAMOND SHINE AND CLEAN S DE RL DE CV","DIRECCION SPORT","DISTRIBUIDORA Y SUMINISTROS RUZ, S. DE R.L. DE C.V.","DULYMEX SA DE CV","PRODUCTOS REFORMA Y/O FANNY SANTO MAGANA","ARMANDO GUIDO LOPEZ","JOSE REYES PEREZ VILLANUEVA","ARELY GONZALEZ HERNANDEZ","MARIA FELIX GOMEZ CISNEROS","MARIO DE DIOS NAVARRETE","ALARCON RAM\u00cdREZ DONACIANO","MARCELO FELIPE TEIXEIRA BRAGA CORREA","JESUS GARCIA","MARIA DEL SOCORRO GIL RODRIGUEZ","FABIOLA SANCHEZ RUIZ","ADRIANA DORINA VALENCIA VEGA","CHAVEZ SAENZ GILBERTO","AUTOREFACCIONARIA FRANCO S.A DE C.V.","PABLO IGNACIO MICHEL ONTIVEROS","HECTOR EULALIO CAZAREZ CASTRO","ESTUDIOS AZTECA SA DE CV","MARTINEZ GONZALEZ ERNESTINA","FERNANDO ROBERTO LEMUS MADRAZO","MARIA GABRIELA PEREZ AVALOS","FRANK ANTONIO SALMON ROMAN","MARCAS NESTLE, S.A DE C.V. ","HERACLIO BERNAL BERNAL","VICENTE ROMERO","ESCOBAS DE CHIHUAHUA, S. DE R.L. DE M.I.\t","EMPACADORA Y COMERCIALIZADORA DE PRODUCTOS BASICOS MEXICO SAPI  DE CV","MA. GUADALUPE PEREZ GONZALEZ","DIANA CEBALLOS VALDELAMAR","EMPRESA DAJASA SA DE CV","EMPAQUE Y DISE\u00d1O SA DE CV","RAMON ISIDRO EMILIO","ROBERTO CARLOS VILLALBA ARIZA","CESAR EFREN VARGAS LOPEZ","ELISA FLORES SANCHEZ","EQUIPOS FRIO CALOR DEL NORTE, S.A. DE C.V.","JOS\u00c9 DE JES\u00daS OLVERA RODR\u00cdGUEZ","EFECTIVALE","EMPACADORA EL FRESNO SA DE CV","Eventos Indice A&B SA DE CV","EMBOTELLADORA EL JAROCHO, S.A. DE C.V.","EMPACADORA JUPASA S DE RL DE CV","ELECTROPURA","EMBOTELLADORA MAYOL S.A. DE C.V.","ESTAFETA MEXICANA SA DE CV","ESPECIALISTAS EN MEDIOS SA DE CV","EXCELENCIA MEDICA SA DE CV","ESTIBADORES DE MORELIA SC DE RL","EMBOTELLADORA NIAGARA DE MEXICO, S. DE R.L. DE C.V.","EMPACADORA NOR-VER, S.A. DE C.V.","EQUIPOS Y REFACCIONES DE CHETUMAL SA DE CV","ELEGANCIA ROPA CON ESTILO","ESTRATEGIAS Y SOLUCIONES A SU SERVICIO SA DE CV","ESTACION DE SERVICIO BOCA DEL MONTE, S.A. DE C.V.","ESTACION DE SERVICIO BEE AKABICHE S.A. DE C.V.","ESTIBADORES DEL SAGRADO CORAZON SC DE RL DE CV","ESTACION DE SERVICIOS COLORADO, S.A. DE C.V.","ESTACION DE SERVICIO DO\u00d1A ADE, S.A. DE C.V.","ESTACION DE SERVICIO SAN DIONISIO, S. A. DE C. V.","ESTACION DE SERVICIO ZAPOTECOS, S.A. DE C.V.","EMPACADORA DE SEMILLAS ZARAGOZA, S.A. DE C.V.","EXPLORA TOURS SA DE CV","ESTIBADORES DE LA VIRGEN DE GUADALUPE S.C. DE R.L. DE C.V.","EXPRAL SA DE CV","EXTSEIM SA DE CV","ALONSO CHAVEZ PEINADO","NELVA OCAMPO BARRUETA","JOSE ANTONIO SOLIS VILLEGAS","MARIA ROSA LEDESMA RIVERA","MARIANA LOBATO BACRE","GILBERTO GUADALUPE GONZALEZ ESTRADA","DESINFECTANTES DEL SURESTE SA DE CV","MARIA DEL PILAR VARGUEZ DOMINGO","SANTIAGO DELGADO CHACON","LUIS CRUZ ALVARADO","JUAN HERNANDEZ SANTES","LUIS ALBERTO FONSECA FLORES","ARTURO VERDUZCO REYNOSO","JOSE GUADALUPE GOMEZ VILLALOBOS","FANERMEX SA DE CV","JUAN DE DIOS CERINO LOPEZ ","AMADEO PULIDO RINCON","MARTIN ALEJANDRO MENDEZ COBIAN","FIESTA CAFE SAS DE CV","LORENZO BENAVENTE VALADEZ","LOURDES GARCIA MONTERO","JOSE JUVENTINO LOPEZ PAZ","FERVAB SA DE CV","FUNCIONAMIENTO INTEGRO DE RADIODIFUSORAS MEXICANAS ENLAZADAS, S.A. de C.V.","FABRICA DE JABON LA CORONA SA DE CV","FRANK POR LABORATORIES, S.A. DE C.V.","FIERRO Y LAMINA DE ZINC, S.A. DE C.V.","FRUITEX DE MEXICO, S.A.P.I. DE C.V.","FASE OILFIELD SERVICES SA DE CV","FORMULA PROFESIONAL ACTIVA S DE RL DE CV","FABRICA DE PASTAS ALIM. LA AURORA, S.A. DE C.V.","FABRICAS DE PAPEL POTOSI SA DE CV","FOURSPORT PRODUCTS, S.A. DE C.V","FUMIGACIONES QUINTANA Y SERVICIOS DIVERSOS SA DE CV","FRIDMAY, S.A. de C.V.","FRITIERRA, S.P.R. DE R.I.","FRIJOLES Y SEMILLAS DE ZACATECAS, S.P.R. DE R.L. DE C.V.\t","FABRICA DE VELAS Y VELADORAS INDUVELSA, S.A. DE C.V.","GRUPO AGROINDUSTRIAL GAAM, S.A. DE C.V.","GRUPO ACIR NACIONAL SA DE CV","GRUPO ARMAZO SA DE CV","GRUPO AZUCARERO SAN PEDRO, S.A. DE C.V.","GRUPO ACOPIADOR 24 DE AGOSTO, S.A. DE C.V.","GRUPO AUS VER SA DE CV","GAYER, S. DE R.L. DE C.V.","GRUPO COMERCIALIZADOR CELIV SA DE CV","GRUPO COMERCIALIZADORA CAMITER SA DE CV","GRUPO CORPORATIVO EVENTOS VIAJES Y CONVENCIONES GRUCEVICO FG SA DE CV","GRUPO CORRADO SA DE CV","GHIGASA COMERCIAL SA DE CV","GALLETAS CUETARA, S.A. DE C.V.","GRUPO DELOU SA DE CV","GLOBA DISTRIBUCIONES, S.A. DE C.V.","GRUPO EMPRESARIAL INTERAMERICANO ORME, S.A. DE C.V.","GEMORSAN, S.A. DE C.V.","GRUPO ESPECIAL DE REACCION INTRAMUROS SA DE CV","GRUPO ESTUDIAT SA DE CV","GRUPO EXIGRAFIC, S.A. DE C.V.","GRUPO EXIGRAFIC","GPO FREIHEIT FIST, S.A. DE C.V.","GRUPO FRIGON, S.A. DE C.V.","GRUPO HOTELERO H DE A SA DE CV","GRISI HNOS SA DE CV","GASOLINERA IGLUF S.A. DE C.V.","GRUPO INDUSTRIAL MASECA, S.A.B. DE C.V.","GRUPO INDE SOLUCIONES INTEGRALES EN CONSULTORIA Y CAPACITACION SC","GALLETERA ITALIANA, S.A. DE C.V.","GRUPO INDUSTRIAL VIDA, S.A. DE C.V.","GELATINAS JUY SA DE CV","GASOLINERA KEEN DYA S.A.DE C.V.","GRUPO KURZAR S DE RL DE CV","GUAMOT MANTENIMIENTO INDUSTRIAL SA DE CV","GODISE SA DE CV","GASOLINERA PERICOS S DE RL DE CV","GRUPO PAPELERO GUTIERREZ SA DE CV ","GANADEROS PRODUCTORES DE LECHE PURA, S.A.P.I DE C.V.","GRUPO POLYTEK DEL SUR SA DE CV","GALLETERA DE PUEBLA, S.A. DE C.V.","GRUPO DE RADIODIFUSORAS SA DE CV","GALLETERA RICHAUD HERMANOS, S.A. DE C.V.","GRUPO RJX S DE RL DE CV","GRUPO DE SERVICIO AUTOMOTRIZ IDA SA DE CV","GRUPO SABAT SA DE CV","GASOLINERA  SAN BERNABE S.A. DE C.V. ","GXC SERVICIOS","GRANOS Y SEMILLAS DE MEXICO, S.A. DE C.V.","GENERASOFT SOLUTIONS SA DE CV","GAS EL SOBRANTE SA DE CV","GENERAL DE SOLUBLES, S.A.","GUGAR SODA, S.A. DE C.V.","GRANOS Y SEMILLAS DE RIO GRANDE, S.A. DE C.V.","GASOLINERA SUCHIXTLAHUACA, S.A. DE C.V.","GRUPO TELEVISA S A B","GUAJA, S.A. DE C.V.","GRANJAS UNIDAS DE B.C., S.A. DE C.V.","GRANEROS YUMKAX, S.P.R. DE R.L.","HARINAS, S.A. DE C.V.","HIGIENICOS Y DESECHABLES DE MONTERREY, S.A. DE C.V.","LAS HELADAS SPR DE RL","HARINERA DE IRAPUATO, S.A. DE C.V.","HERMANOS JACQUEZ OCHOA SA DE CV","HARI MASA, S.A. DE C.V.","HARI MASA DEL PAC\u00cdFICO, S.A. DE C.V.","HARI MASA DEL SURESTE, S.A. DE C.V.","HARINERA DE SINALOA, S.A. DE C.V.","INDUSTRIAL ACEITERA, S.A. DE C.V.","INDUSTRIA AGRICOLA CARREDANA, S.A. DE C.V.","JORGE HUMBERTO IBARRA DE LA CRUZ","INSPECCION AMBIENTAL TERRESTRE, S.A. DE C.V.","INTERNATIONAL DE BAJA CALIFORNIA SA DE CV","M.C. INTERNATIONAL COMMERCE, S.A. DE C V.","IMPORTADORA Y COMERCIALIZADORA PEME SA DE CV","IDETECA SA DE CV","LA IDEAL SA DE CV","INVESTIGACION ESTRATEGICA KANJI SA DE CV","INDUSTRIAL LA FAMA SA DE CV","IMPACTOS FRECUENCIA Y COBERTURA EN MEDIOS SA DE CV","INSTALACIONES HERROS SA DE CV","INNOVACION HORUS SA DE CV","INDUSTRIAS H24 SA DE CV","INSTALACIONES INDUSTRIALES MANTENIMIENTO Y ABASTOS DE PUEBLA SA DE CV","INNOVATION IN SOLUTIONS AND SERVICES GROUP SA DE CV","INDUSTRIAS JUAN DIEGO, S.A. DE C.V.","INDUSTRIAS JLC SA DE CV","INTEC MEDIOS DE PAGO SA DE CV","FABRICA DE CERILLOS Y FOSFOROS LA INDEPENDIENTE, S.A. DE C.V.","IMPLEMENTOS NEUMATICOS SA DE CV","INDUSTRIAL PATRONA, S.A. DE C.V.","IMPULSORA DE PROYECTOS EMPRESARIALES, S.A. DE C.V.","INGENIERIA DE PROYECTOS PULSUS SA DE CV","IMAGEN RADIO COMERCIAL SA DE CV","INGENIO AZUCARERO MODELO, S.A. DE C.V.","LA ITALIANA, S.A. DE C.V.","INTEGRACION Y TRANSFORMACION, S.A. DE C.V.","AT&T COMERCIALIZACION MOVIL S DE RL DE CV","JABONERA LA ESPUMA, S.A. DE C.V.","JUNTOS A NUTRIR, S.A. DE C.V.","JOCAPE SA","KPMG CARDENAS DOSAL SC","KIMBERLY CLARK DE MEXICO S A B DE C V","KONSTRUCTIVA FORMS SA DE CV","KRAZY KOLA LOKA, S.A. DE C.V.","KIDZANIA DE MEXICO SA DE CV","LLANTERA EL AGUILA, S.A. DE C.V.","LONJA AGROPECUARIA DE JALISCO, S.A. DE C.V.","LUBRICANTES Y ADITIVOS DE LA PAZ, S.A. DE C.V.","LUBRICANTES Y ADITIVOS DE LA PAZ, S.A. DE C.V. ","LLARESER, S.A. DE C.V. ","MC LARES AUTOSERVICIO SA DE CV","COMERCIALIZADORA KIKUMITSU INTERNATIONAL SA DE CV","LOGI COMER PRO SA DE CV","LLANTERA COSTERA DEL PACIFICO, S.A. DE C.V.","LLANTAS DE CUAUTLA","LENTEJAS Y DERIVADOS DE HUANIQUEO SPR DE RL","LEALGIL Y CIA SA DE CV","LEBENPRO SA DE CV","LUZ ETERNA, S.A. DE C.V.","LINCOLN FIRE SA DE CV","LONAS GOMEZ SA DE CV","LECHERA GUADALAJARA SA DE CV","LICONSA, S.A. DE C.V.","LACTEOS INDUSTRIALIZADOS DEL NORESTE, S.A. DE C.V.","LEAL MATERIAS PRIMAS, S.A. DE C.V.","LUBRICACION MOLOLOA Y SERVICIOS, S.A. DE C.V.","LONAS DEL NOROESTE SA DE CV","LM REVITALIZACION EMPRESARIAL SC","LUMAMEXGLO SA DE CV","MEDIO AMBIENTE JARDINES Y PLAGAS S DE RL DE CV","MUNICIPIO DE ALAMOS","MERCADEO DE ALIMENTOS SA DE CV","MALIQ, S.A. DE C.V.","MOLINOS ANAHUAC, S.A. DE C.V.","MARINDUSTRIAS, S.A. DE C.V.","MEXICANA DE ARROZ, S.A. DE C.V.","MEXICANOS Y AMERICANOS SISTEMAS DE COMUNICACION SA DE CV","MAZARS AUDITORES","MOLINOS AZTECA  SA DE CV","MILLER CITY, S.A. DE C.V.","MANTENIMIENTO Y CONTROL DE PLAGAS, S.A. DE C.V.","MCROS SA DE CV","ELMECA SA DE CV","MULTISERVICIOS DAMU SA DE CV","MANUFACTURA Y DISE\u00d1OS DE EMPAQUE PROTECTORES S DE RL MI","MAQUINAS DIESEL SA DE CV","MERCANTA, S.A. DE C.V.","GILBERTO MEZA SERRANO","EL MUNDO ES TUTO, S.A. DE C.V.","MOLINO LA FAMA SA DE CV","MOLINOS DEL FENIX SA DE CV","MISSION FOODS MEXICO, S. DE R.L. DE C.V.","MAYA FUERTE S.A. DE C.V.","MARLIN GRAN CLASE, S.A. DE C.V.","MACHETEROS DEL GUADIANA AC","MAYOREO GENERAL DE UNIFORMES SA DE CV","GRUPO KASTO MOLINOS, S.A. DE C.V.","MOLINO HARINERO SAN BLAS S.A DE C.V","MOLINO HARINERO SAN BLAS S.A. DE C.V.","MECANICA INTEGRAL LEDEHER SA DE CV","MA IMPRESORES SA DE CV","MEXICANA DE INDUSTRIAS Y MARCAS, S.A. DE C.V.","MINSA, S.A. DE C.V.","MANTECAS E INGREDIENTES SA DE CV","MEAD JOHNSON NUTRICIONALES DE MEXICO, S. DE R.L. DE C.V.","MANUFACTURAS Y MANIOBRAS, S.C.","MANIOBRAS MANTENIMIENTO Y DIVERSOS, S.C.","METLIFE MEXICO, S.A.","MOLINERA DE MEXICO SA DE CV","MUNSA MOLINOS, S.A. DE C.V. ","MANANTIALES DE NOCHE BUENA, S.A. DE C.V","Marcas Nestle","MUEBLES PONTEVEDRA SA DE CV","MEGACIMA RADIO SA DE CV","MGR REFRIGERACION SA DE CV","MULTISERVICIO SAN ISIDRO LABRADOR S.A DE C.V ","MAYA SORTING SA DE CV","MOLINO DE TRIGO SAN RAFAEL S.A. DE C.V.","COMPA\u00d1IA MEXICANA DE TRASLADO DE VALORES SA DE CV ","MEGASERVICIO DEL VALLE, S.A. DE C.V.","MUELLES VALENZUELA S.A. DE C.V. ","MULTISERVICIOS VAZQUEZ DE IXTLAN S.A. DE C.V."," MAS X TI AGRICOLA, S.P.R. DE R.L.","Notimex Agencia de Noticias del Estado Mexicano","NAVOLATOURS","NUESTRO CAMPO, S. DE R.L. DE C.V.","NUTRIM. Y COMPLEMENTOS ALIMENTICIOS, S.A. DE C.V.","NEWBERRY Y COMPA\u00d1IA SA DE CV","NORTH GRAINS TRADING SA DE CV","NOVAPACK SISTEMAS S.A DE C.V ","NISSAUTO SONORA SA CV","NAVANI TOURS S.A DE C.V.","NUTRIMARCAS, S.A. DE C.V.","OPERADORA Y ADMINISTRADORA DE INFORMACION Y EDITORIAL SA DE CV","OPERADORA AVICOLA SAN MIGUEL, S.A. DE C.V.","OCAMI COMERCIALIZACION, S.A. DE C.V.","ORTIGA COMERCIALIZADORA SA DE CV","OCHOA COMERCIAL, S.A. DE C.V.","OFILLEVA SA DE CV","ORFEBRES HISPANOAMERICA, S.A. DE C.V.","OPERADORA LEMON SA DE CV","OROS PACIFICA COMERCIAL, S.A. DE C.V.  ","ORIGINALES SHYLA SA DE CV","OPERADORA DE SERVICIOS Y PRODUCTOS INDEL SA DE CV","OASIS DE XALAPA TURISMO SC","CIA. PROCTER & GAMBLE MEXICO, S. DE R.L. DE C.V.","PRODUCTOS AGRO BOG S. DE R.L. DE C.V.","PROMOTORA AMBIENTAL DEL CENTRO SA DE CV","POLICIA AUXILIAR DEL ESTADO DE MICHOACAN DE OCAMPO","PROCTER & GAMBLE MEXICO, INC.","PRODUCTOS ALIMENTICIOS LA GUADALUPANA SA DE CV","PASTAS ALIMENTICIAS LAZIALI, S.A. DE C.V.","PRODUCTOS ALIMENTICIOS LA MODERNA, S.A. DE C.V.","PRODUCTORA DE ALIMENTOS MEXICANOS SA DE CV","PROTEINA ANIMAL, S.A. DE C.V.","PROCESADORA AGROINDUSTRIAL DEL NORTE, S. DE P.R. DE R.L. DE C.V.","PINTURAS ACUARIO DE QUERETARO SA DE CV","PRODUCTOS ALIMENTICIOS LA SANMARQUE\u00d1A SA DE CV","PHI AUTOMATION","PLASTICOS BEDA, S.A. DE C.V.","PROFESSIONAL BUSINESSES PARTNERSHIP SC","PURIFICADORA BRISA SA DE CV"," PROCESADORA DE CARNICOS DERIVADOS Y GRANOS DEL CENTRO, S.A. DE C.V.","PUBLICIDAD CINEMATOGRAFICA HERRERA Y ASOCIADOS SA DE CV","PRIMERO COMPUTACION, S.A. DE C.V.","PINSA COMERCIAL SA DE CV","EL PEDREGAL CONSULTORES, S.A. DE C.V.","PRODUCCIONES CONTI SA DE CV","PRODUCTOS DE CONSUMO O'MEGA S.A. DE C.V.","PEST CONTROL SAN LUIS SC","PRODUCTOS DEL CAMPO DE ZACATECAS, S.P.R. DE R.L.","PERIODICO DIGITAL SENDERO S A P I DE CV","PROCESAMIENTO ESPECIALIZADO DE ALIMENTOS SAPI  DE CV","PRODUCTORA EXPOFOOD SPR DE RL","PERIODICO EXCELSIOR SA DE CV","PLASTICOS Y FERTILIZANTES DE MORELOS, S.A. DE C.V.","PRODUCTORES DE FRIJOL DE SAN JUAN, S.P.R. DE R.L. DE C.V.","PRODUCTOS DE HARINA SA DE CV","PATINES HIDRAULICOS TOLUCA SA DE CV","PROCESADORA DE HARINAS LA UNION SC DE RL DE CV","PROMEXA I&E, S.A. DE C.V.","PROVEEDORA INDUSTRIAL BA3 SA DE CV","EL PIKACHO, SPR DE RI","PRODUCTOS INTERNACIONALES MABE SA DE CV","PROQUIMIA LABORATORIOS SA DE CV","PRODUCTORA MEXICANA DE ARROZ, S.A.P.I. DE C.V.","PRODUCTOS MEXICANOS AGUILILLA, S.A. DE C.V.","PRODUCTOS MANUELJOSE, S.A. DE C.V.\t","PASTEURIZADORA MAULEC SA DE CV","PRODUCCIONES MCR SA DE CV","PANASONIC DE MEXICO, S.A. DE C.V.","PRODUCTOS MEXICANOS, S.A. DE C.V.","PRODUCTOS MEZA SA DE CV","PRODUCTOS MITZA SA DE CV","PUBLIC MANAGEMENT DE MEXICO SC","PASTAS MOLISABA, S.A. DE C.V.","PROCESADORA MEXICANA DE PRODUCTOS AGROPECUARIOS SA  ","PAPELERA DEL NORTE DE LA LAGUNA SA DE CV ","PROTEINAS Y OLEICOS, S.A. DE C.V.","POLIMERIDA SA DE CV","POLIMERIDA, S.A. DE C.V.","PAMBOLEROS ONLINE SA DE CV","POVISA SA DE CV","PROMETEO PROYECTOS EJECUTIVOS, S.A. DE C.V.","POLY PELICULAS IMPRESAS, S.A. DE C.V.","PROM. DE PROD. Y MERCADOS MEXICANOS, S.A. DE C.V.","PRODUCTOS PRACTICOS DE MADERA SA DE CV","PRODEA, S.A. DE C.V.","PROABRI S A P I DE CV","PROFCAN, S.A. DE C.V.","PRODAGRO S.A. DE C.V.","Productos Serel, S.A. de C.V.","PORTER SOLUTIONS SA DE CV","PADAME SPORT'S, S.A. DE C.V.","PROCESADORA DE SEMILLAS DE TOMATLAN SPR DE RL DE CV","PHOTO STOCK SA DE CV","PRENSA SURIANA SA DE CV","POLIETILENOS DEL SURESTE SA DE CV","SEGUROS DE VIDA SURA MEXICO SA DE CV","PLOMIFERRETERA EL TORNILLO SA DE CV","PRODUCTOS AGROINDUSTRIALES AZTECA, S.A. DE C.V.","PREVULCANIZADOS Y LLANTAS DEL ISTMO S.A. DE C.V.","QUIMICOS ESPECIALIZADOS MAQUISA SA DE CV","QUIMICA GONCAL SA DE CV","QUALAMEX, S.A. DE C.V.","RAFEDHER SA DE CV","REFACCIONES ALMODOBAR, S.A. DE C.V. ","RADIODIFUSORAS ASOCIADAS SA DE CV","ROMINA CONSTRUCCIONES SA DE CV","RED DE EMPRESAS COMERCIALIZADORAS CAMPESINAS DE MICHOAC\u00c1N A.R. DE I.C DE RL","RIVER ECOPRODUCTS SA DE CV","RMG INTERNACIONAL, S.A. DE C.V.","REPRESENTACIONES NYJISA, S.A. DE C.V.","ARMANDO ROBLES CARDENAS ","SPECTRUM BRANDS DE MEXICO SA DE CV","RED DE RADIOS COMUNITARIAS DE MEXICO AC","REFACCIONES Y SERVICIOS ANAHUAC SA DE CV","REALIZACIONES SOL S A P I DE CV","RESTAURANTE SE&ORIAL","RESTAURANT TIPICO EL KILO S.A. DE C.V.","RUSAL SA DE CV","REC 21 SA DE CV","SERVICIO DE AIRE ACONDICIONADO Y REFRIGERACION LOPEZ SA DE CV","SABORMEX, S.A. DE .C.V.","SERVICIOS AVANZADOS Y ESPECIALIZADOS DE TAMAULIPAS S. A. DE C. V.","SERVICIO AVILA DEL FUERTE DE SINALOA, S.A. DE C.V. ","SERVICIOS DE ADMINISTRACION DE PERSONAL ESPECIALIZADO DE LIMPIEZA SAPEL SA DE CV","SUSAN Y ASOCIADOS SC","SERVICIOS AXOL SA DE CV","SEGUROS AZTECA SA DE CV","SEGUROS BANORTE SA DE CV, GRUPO FINANCIERO BANORTE","EL SOL DEL CAMPESINO SPR DE RL DE CV","LA SELVA CAFE, S.A. DE C.V.","SERVICIOS CLEANER, S.A. DE C.V.","SHARP CORPORATION MEXICO","SOLLERTIS CONSULTORES SC","SIMCO CONSULTORES SA DE CV","SEMILLAS CONCENTRADAS OJO DE AGUA, S.P.R. DE R.I.","SOCIEDAD COOPERATIVA DE PROD. AGROP. LA PINTADA, S.C.L.","SOCIEDAD COOPERATIVA TRABAJADORES DE PASCUAL SCL","SUPER DIESEL DEL CARIBE SA DE CV","SERVICIOS ESPECIALIZADOS EN CAPACITACION Y FORMACION DE ADMINISTRADORES DE MEXICO SC","SINDICATO DE ESTIBADORES, CONEXOS Y SIMILARES DE LA REGION LAGUNERA CTM","SISTEMAS ECOLOGICOS PARA EL CONTROL DE PLAGAS SA DE CV","SERVICHARTERBUS SA DE CV","SIERRA GRANDE ALIMENTOS, S.A. DE C.V.","SE\u00d1ALETICA Y GRAN FORMATO SA DE CV","SG PROVEEDORES, S.A DE C.V.","SCHETTINO HERMANOS, S. DE R.L. DE C.V.","SERVICIOS INDUSTRIALES Y EMPRESARIALES DE LA LAGUNA SA DE CV","SERVIEMPRESARIALES INTELIGENTES DE MEXICO SA DE CV","SAFLOSA INDUSTRIA REAL SA DE CV","SALES DEL ISTMO,S.A.DE C.V.","SELMAVE MANIOBRAS SC","SANCHEZ Y MARTIN, S.A. DE C.V.","SIERRA MADRE COMBUSTIBLES Y SERVICIOS S.A. DE C.V.","SUMINISTROS DE MAIZ DEL MAYAB, S.A. DE C.V.","SERVICIOS MULTIPLES DE SINALOA SA DE CV","SERVICIOS MULTIPLES Y SIMILARES SA DE CV","SINDICATO NACIONAL DE ALIJADORES SECCION 84","SIXSIGMA NETWORKS MEXICO","SERVICOSTA OAXAQUE\u00d1A S.A. DE C.V.","SONOCAF SA DE CV","SONIGAS SA DE CV","Servicio Pan Americano de Protecci\u00f3n, S.A. de C.V.","SAN PEDRO PACIFIC PRODUCTS, S.A. DE C.V","SOCIEDAD DE PRODUCCION RURAL HERNANDO DE VILLAFA\u00d1E, S. DE P.R. DE R.L","SERVICIOS Y REFACCIONES GONZALEZ, S.A. DE C.V.","ALIMENTOS SELLO ROJO SA DE CV","SERVICIOS Y REFACCIONES DE PRESTIGIO EN CAMPECHE SA DE CV","SOCORRO ROMERO SANCHEZ, S.A. DE C.V.","SALG SERVICIOS DE ASEO Y LIMPIEZA EN GENERAL SA DE CV","SERVICIO SAN FRANCISCO DEL MEZQUITAL S.A DE CV","SEPSA SERVICIOS INTEGRALES SA DE CV","SISTEMAS Y SERVICIOS DE SEGURIDAD PRIVADA INTELIGENTE-SSSPI","SINDICATO DE TRABAJADORES EN MANIOBRAS DE CARGA Y DESCARGA DE VEHICULOS DE TRANSPORTE EN GENERAL DE TICUL Y SU MUNICIPIO","SALSA TEPICOR DE NAYARIT, S.A. DE C.V.","SINDICATO \u00daNICO DE MANIOBRAS DE CARGA Y DESCARGA DE VEHICULOS DE TRANSPORTE EN GENERAL, NACHI COCOM DE LA LOCALIDAD DE SOTUTA YUCAT\u00c1N Y SU MUNICIPIO","SUMMA COMPANY, S.A. DE C.V.","SERVICIOS VERSATILES ARANDA, S. DE R.L. DE C.V.","CIA. SALINERA DE YAVAROS, S.A.","TURISISTEMA DE LA ALTA SIERRA, S.C. DE R.L. DE C.V.","TEXTILES Y ACABADOS SAN FERNANDO SA DE CV","TUURI BACHIAM COMERCIALIZADORA DE GRANOS, S. DE R.L. DE C.V.","TELEFONIA POR CABLE SA DE CV","CABLEMAS TELECOMUNICACIONES","TECUHTLI CONSTRUCTOR SA DE CV","TURISMO CREATIVO","TELECOMUNICACIONES CONTROLADORA DE SERVICIOS,S.A. DE C.V.","SUMTRA S DE RL DE CV","TECHNISEARCH S.A DE C.V.","TOTAL EVENT PRODUCTIONS, S.A. DE C.V.","TRES ESTRELLAS DE RIO GRANDE, S.P.R. DE R.I.","TRIGOS INDUSTRIALIZADOS DE MEXICO, S.A. DE C.V.","TOKA INTERNACIONAL S A P I DE CV","TERA INGENIERIA SA DE CV","TINSON S DE RL DE CV","TRESMONTES LUCCHETTI MEXICO, S.A. DE C.V.","ETN TURISTAR DE LUJO, S.A. DE C.V.","TRICYCLO MUSIC & ENTERTAINMENT SA DE CV","TOSTADORES Y MOLINOS DE CAFE COMBATE SA DE CV","TOSTADORES Y MOLINOS SA DE CV","TOTAL PARTS AND COMPONENTS SA DE CV","Transporte de Personal Peque\u00f1a, S.A de C.V.","TURISMO PALO VERDE SA DE CV","TURISMO Y TRANSPORTE AUTOCARES DE MEXICO S.A. DE C.V.","TRANSPORTES TURISTICOS DEL BAJIO SA DE CV","TIDA TOURS SA DE CV","UNIVERSIDAD AUTONOMA DE GUADALAJARA AC","UN\u00cdON AGR\u00cdCOLA REGIONAL DE SINALOA","UNIFORMES CARAVANA SA DE CV","UNI\u00d3N DE CARGADORES Y DESCARGADORES \u00daNICOS DE CAMIONES DE CARGA URBANOS DE CAMINOS VECINALES Y DE RUTAS FEDERALES  EN ZONAS FEDERALES Y ESTATALES , FERROCARRILERAS, \u00c1REAS Y MUELLE ANTIGUO EN LA CIUDAD Y PUERTO DE CAMPECHE","UNIVERSAL EXTINTORES SA DE CV","UNIDAD GANADERA LA ROSITA SPR DE RL DE CV","UNIPROVA DE MEXICO SA DE CV","UNILEVER DE MEXICO, S. DE R.L. DE C.V.","UNIKEPROMOS, S.A. DE C.V. ","EL UNIVERSAL COMPA\u00d1IA PERIODISTICA NACIONAL, S.A. DE C.V.","UNION DE TRABAJADORES DE CARGA Y DESCARGA EN TRANSPORTACION DE MERCANCIAS EN CENTROS DE DISTRIBUCION DEL ESTADO DE TABASCO","UNIVERSAL WIPES, S.A. DE C.V.","LA VIZCAINA ALIMENTOS SELECTOS, S.A. DE C.V. ","VEILIGHEID DEL CENTRO SA DE CV","VISION CONSERVACION Y MANTENIMIENTO S DE RL DE CV","VALENZUELA DELFIN, S.A. DE C.V. ","VITASERVICIOS DOKE","VERSAFLEX","VALKIRIA GASTRONOMIA SA DE CV","VENTAS LERP SA DE CV","VIFESA DE MEXICO SA DE CV","VERSAFLEX QUERETARO SA DE CV","VALLE REDONDO SA DE CV","VIVERES DE SAN RAFAEL, S.A. DE C.V.","VERIFICACIONES DE TEPATITLAN SA DE CV","VIAJES TURISTICOS VERACRUZ SA DE CV","VSH VIGILANCIA Y PROTECCION","ASPEN MEXICO S DE RL DE CV","ZERBY ENTREGAS OPORTUNAS, S.A. DE C.V.","ZUCARMEX, S.A. DE C.V.","\u00d1UUGAS S.A. DE C.V."],"unidades_unicas":[2,1,1,1,1,1,1,2,2,1,1,2,1,1,2,1,1,1,1,1,2,2,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,2,2,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1,1,1,1,2,2,1,1,1,1,1,1,1,1,2,1,1,1,2,1,1,1,1,1,1,1,1,1,1,2,2,1,1,1,1,2,1,2,1,1,1,1,1,1,1,1,1,2,2,2,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,2,1,2,1,1,1,2,1,2,2,1,1,2,1,2,1,1,1,1,1,1,1,2,1,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,1,2,1,2,1,2,1,1,1,1,1,1,1,1,1,1,1,2,1,1,2,1,1,1,1,2,2,1,1,1,2,1,2,2,1,2,2,1,1,1,1,2,1,1,2,1,2,2,3,2,1,1,2,1,1,1,1,1,1,1,2,1,2,2,1,1,2,1,1,1,1,1,1,1,1,1,1,1,2,1,1,2,1,1,1,1,1,1,1,1,2,1,1,1,1,1,1,2,2,2,4,2,1,2,1,1,1,1,1,1,1,1,1,2,1,2,1,1,1,5,1,1,2,1,1,2,1,1,1,1,1,3,1,5,1,1,1,1,1,3,3,2,2,5,4,3,1,1,1,2,2,2,2,1,1,1,1,2,2,2,2,1,2,2,1,1,1,1,5,4,1,2,1,1,1,2,2,2,1,1,1,2,2,1,1,2,1,1,2,1,1,1,2,1,1,5,2,2,1,3,1,1,1,1,1,1,1,1,3,2,1,1,3,1,1,2,1,2,1,2,1,2,2,1,1,1,1,1,2,3,1,2,1,4,2,2,2,1,2,1,1,1,1,3,1,1,1,2,2,1,1,1,4,2,5,1,1,4,5,1,2,1,1,2,3,2,1,5,5,2,1,3,1,2,1,2,1,1,2,2,5,1,2,2,1,1,1,1,5,4,1,1,4,1,1,2,1,2,1,2,2,1,3,4,2,1,1,1,2,2,1,1,5,1,1,1,1,3,2,2,1,1,2,1,2,2,2,2,1,1,2,3,2,1,1,3,1,2,2,1,1,2,2,1,1,5,1,1,2,1,1,1,1,1,1,1,2,1,1,1,1,2,1,1,2,1,1,2,1,1,1,2,2,1,3,1,5,1,2,2,3,1,2,1,2,1,1,2,4,2,1,1,2,2,1,3,1,1,1,1,1,2,1,5,1,1,2,1,1,1,1,4,2,1,2,2,2,1,2,1,1,2,1,1,1,1,3,1,3,1,3,1,1,1,1,1,2,3,2,1,2,2,2,2,2,1,2,1,4,1,2,1,1,1,1,1,1,1,1,2,1,2,1,1,1,2,2,1,1,1,1,2,1,1,1,2,1,5,2,2,3,1,1,2,3,2,1,1,3,1,3,2,1,1,1,1,1,1,2,1,1,1,1,2,1,3,2,1,2,1,2,1,1,2,1,1,1,4,1,4,5,2,2,2,1,1,1,1,4,1,3,1,2,1,1,1,2,2,2,1,2,2,2,2,2,1,3,1,1,2,3,2,1,1,2,2,3,1,3,1,1,1,1,2,1,1,3,1,3,1,1,1,3,1,1,2,3,1,2,1,3,2,1,1,2,4,4,2,3,3,2,1,4,1,4,1,1,1,3,3,2,1,1,1,2,1,1,1,1,4,1,1,2,5,3,2,1,1,3,1,1,1,1,2,4,4,4,1,2,5,1,2,2,1,1,1,1,1,1,2,2,1,1,2,1,1,2,1,3,5,1,1,3,5,4,4,2,1,2,5,4,2,5,1,1,1,1,1,2,2,1,1,2,2,1,1,4,3,1,1,1,1,1,2,1,2,4,2,2,1,2,2,1,1,1,1,5,1,1,1,4,1,4,3,2,1,3,1,1,2,1,1,1,2,1,2,5,1,1,2,1,1,1,2,1,1,1,1,2,1,1,1,2,3,5,2,4,1,1,3,1,2,2,1,2,3,2,1,1,5,1,1,2,1,1,1,4,3,3,1,2,1,1,1,1,2,1,1,2,1,2,3,1,1,2,2,2,2,1,1,1,1,3,2,1,2,1,1,1,2,1,1,1,1,5,1,1,1,1,1,1,1,1,2,1,2,1,1,2,2,3,2,2,2,1,2,4,1,1,4,1,1,2,5,1,5,1,1,1,1,2,1,1,3,1,4,2,2,1,2,1,1,1,1,1,1,2,2,1,5,2,4,1,1,1,1,1,1,2,2,1,1,1,1,4,2,1,1,4,3,1,2,2,1,1,1,1,1,1,1,1,1,2,2,2,2,5,1,1,2,1,1,1,1,2,1,4,1,1,1,1,2,3,2,2,1,1,1,5,2]},"selected":{"id":"1285","type":"Selection"},"selection_policy":{"id":"1309","type":"UnionRenderers"}},"id":"1284","type":"ColumnDataSource"},{"attributes":{"high":5.0,"low":1.0,"palette":["#440154","#440255","#440357","#450558","#45065a","#45085b","#46095c","#460b5e","#460c5f","#460e61","#470f62","#471163","#471265","#471466","#471567","#471669","#47186a","#48196b","#481a6c","#481c6e","#481d6f","#481e70","#482071","#482172","#482273","#482374","#472575","#472676","#472777","#472878","#472a79","#472b7a","#472c7b","#462d7c","#462f7c","#46307d","#46317e","#45327f","#45347f","#453580","#453681","#443781","#443982","#433a83","#433b83","#433c84","#423d84","#423e85","#424085","#414186","#414286","#404387","#404487","#3f4587","#3f4788","#3e4888","#3e4989","#3d4a89","#3d4b89","#3d4c89","#3c4d8a","#3c4e8a","#3b508a","#3b518a","#3a528b","#3a538b","#39548b","#39558b","#38568b","#38578c","#37588c","#37598c","#365a8c","#365b8c","#355c8c","#355d8c","#345e8d","#345f8d","#33608d","#33618d","#32628d","#32638d","#31648d","#31658d","#31668d","#30678d","#30688d","#2f698d","#2f6a8d","#2e6b8e","#2e6c8e","#2e6d8e","#2d6e8e","#2d6f8e","#2c708e","#2c718e","#2c728e","#2b738e","#2b748e","#2a758e","#2a768e","#2a778e","#29788e","#29798e","#287a8e","#287a8e","#287b8e","#277c8e","#277d8e","#277e8e","#267f8e","#26808e","#26818e","#25828e","#25838d","#24848d","#24858d","#24868d","#23878d","#23888d","#23898d","#22898d","#228a8d","#228b8d","#218c8d","#218d8c","#218e8c","#208f8c","#20908c","#20918c","#1f928c","#1f938b","#1f948b","#1f958b","#1f968b","#1e978a","#1e988a","#1e998a","#1e998a","#1e9a89","#1e9b89","#1e9c89","#1e9d88","#1e9e88","#1e9f88","#1ea087","#1fa187","#1fa286","#1fa386","#20a485","#20a585","#21a685","#21a784","#22a784","#23a883","#23a982","#24aa82","#25ab81","#26ac81","#27ad80","#28ae7f","#29af7f","#2ab07e","#2bb17d","#2cb17d","#2eb27c","#2fb37b","#30b47a","#32b57a","#33b679","#35b778","#36b877","#38b976","#39b976","#3bba75","#3dbb74","#3ebc73","#40bd72","#42be71","#44be70","#45bf6f","#47c06e","#49c16d","#4bc26c","#4dc26b","#4fc369","#51c468","#53c567","#55c666","#57c665","#59c764","#5bc862","#5ec961","#60c960","#62ca5f","#64cb5d","#67cc5c","#69cc5b","#6bcd59","#6dce58","#70ce56","#72cf55","#74d054","#77d052","#79d151","#7cd24f","#7ed24e","#81d34c","#83d34b","#86d449","#88d547","#8bd546","#8dd644","#90d643","#92d741","#95d73f","#97d83e","#9ad83c","#9dd93a","#9fd938","#a2da37","#a5da35","#a7db33","#aadb32","#addc30","#afdc2e","#b2dd2c","#b5dd2b","#b7dd29","#bade27","#bdde26","#bfdf24","#c2df22","#c5df21","#c7e01f","#cae01e","#cde01d","#cfe11c","#d2e11b","#d4e11a","#d7e219","#dae218","#dce218","#dfe318","#e1e318","#e4e318","#e7e419","#e9e419","#ece41a","#eee51b","#f1e51c","#f3e51e","#f6e61f","#f8e621","#fae622","#fde724"]},"id":"1283","type":"LinearColorMapper"},{"attributes":{"fill_alpha":{"value":0.5},"fill_color":{"field":"color","transform":{"id":"1283","type":"LinearColorMapper"}},"line_alpha":{"value":0.5},"line_color":{"field":"color","transform":{"id":"1283","type":"LinearColorMapper"}},"size":{"units":"screen","value":7},"x":{"field":"n_contracts"},"y":{"field":"contract_amount"}},"id":"1287","type":"Scatter"},{"attributes":{"axis_label":"contract_amount","bounds":"auto","formatter":{"id":"1299","type":"LogTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"1267","type":"LogTicker"}},"id":"1266","type":"LogAxis"},{"attributes":{"dimension":1,"grid_line_color":null,"ticker":{"id":"1267","type":"LogTicker"}},"id":"1270","type":"Grid"},{"attributes":{},"id":"1294","type":"BasicTicker"},{"attributes":{"callback":null,"renderers":[{"id":"1292","type":"GlyphRenderer"}],"tags":["hv_created"],"tooltips":[["n_contracts","@{n_contracts}"],["contract_amount","@{contract_amount}"],["unidades_unicas","@{unidades_unicas}"],["supplier_id","@{supplier_id}"],["supplier_name","@{supplier_name}"]]},"id":"1251","type":"HoverTool"},{"attributes":{"num_minor_ticks":10},"id":"1262","type":"LogTicker"},{"attributes":{},"id":"1273","type":"WheelZoomTool"},{"attributes":{},"id":"1306","type":"BasicTickFormatter"},{"attributes":{"fill_alpha":{"value":0.2},"fill_color":{"field":"color","transform":{"id":"1283","type":"LinearColorMapper"}},"line_alpha":{"value":0.2},"line_color":{"field":"color","transform":{"id":"1283","type":"LinearColorMapper"}},"size":{"units":"screen","value":7},"x":{"field":"n_contracts"},"y":{"field":"contract_amount"}},"id":"1291","type":"Scatter"}],"root_ids":["1252"]},"title":"Bokeh Application","version":"1.4.0"}};
+  var render_items = [{"docid":"a17ebbc6-4f3e-4d53-ba24-f55450b4908d","roots":{"1252":"3c7e532e-b1f5-4a37-96f8-8e4137331138"}}];
+  root.Bokeh.embed.embed_items_notebook(docs_json, render_items);
+
+  }
+  if (root.Bokeh !== undefined) {
+    embed_document(root);
+  } else {
+    var attempts = 0;
+    var timer = setInterval(function(root) {
+      if (root.Bokeh !== undefined) {
+        clearInterval(timer);
+        embed_document(root);
+      } else {
+        attempts++;
+        if (attempts > 100) {
+          clearInterval(timer);
+          console.log("Bokeh: ERROR: Unable to run BokehJS code because BokehJS library is missing");
+        }
+      }
+    }, 10, root)
+  }
+})(window);
+</script>
+</div>
